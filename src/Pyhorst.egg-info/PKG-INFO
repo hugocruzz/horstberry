@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: Pyhorst
+Version: 1.0.0
+Summary: Bronkhorst Flow Controller Interface
+Author: Hugo Cruz
+Requires-Python: >=3.7

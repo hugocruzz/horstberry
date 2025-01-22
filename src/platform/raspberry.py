@@ -1,0 +1,22 @@
+import os
+from .base import PlatformInterface
+from ..configs.raspberry_config import DISPLAY_CONFIG, CONNECTION_CONFIG
+
+class RaspberryPlatform(PlatformInterface):
+    """Raspberry Pi specific platform implementation"""
+    
+    def get_connection_settings(self):
+        return CONNECTION_CONFIG
+    
+    def get_display_settings(self):
+        return DISPLAY_CONFIG
+    
+    def setup_platform(self):
+        # Raspberry Pi specific setup
+        os.environ['DISPLAY'] = ':0'  # Ensure display is set
+        
+        # Set up touchscreen if needed
+        try:
+            os.system('xinput set-prop "FT5406 memory based driver" "Coordinate Transformation Matrix" 1 0 0 0 1 0 0 0 1')
+        except:
+            print("Warning: Could not configure touchscreen")
