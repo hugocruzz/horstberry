@@ -75,39 +75,3 @@ MIT License
 
 Authors
 Hugo Cruz
-
-futur:
-- Input: concentration à la sortie
-- fonction: debit de chaque EL-FLOW qui injectera directement pendant x temps 
-https://github.com/bronkhorst-developer/bronkhorst-propar/blob/master/propar/__init__.py
-
-Structure:
-
-```
-bronkhorst/
-│
-├── src/
-│   ├── __init__.py
-│   ├── controllers/
-│   │   ├── __init__.py
-│   │   ├── flow_controller.py    # Hardware interface
-│   │   └── gui_controller.py     # GUI logic
-│   │
-│   ├── models/
-│   │   ├── __init__.py
-│   │   └── calculations.py       # Flow calculations
-│   │
-│   └── views/
-│       ├── __init__.py
-│       └── main_window.py        # GUI layout
-│
-├── tests/
-│   ├── __init__.py
-│   ├── test_flow_controller.py
-│   └── test_calculations.py
-│
-├── config/
-│   └── settings.ini             # Configuration (COM ports, etc)
-│
-└── main.py                      # Entry point
-```

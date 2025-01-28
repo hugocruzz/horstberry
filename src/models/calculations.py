@@ -28,3 +28,7 @@ def calculate_flows_variable(C_tot_ppm: float, C1_ppm: float, C2_ppm: float,
         raise ValueError("No solution exists within flow constraints")
 
     return Q1, Q2
+
+def calculate_real_outflow(C1, V1, C2,V2):
+    C_final = (C1*V1 + C2*V2)/(V1+V2)
+    return C_final
