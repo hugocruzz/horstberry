@@ -50,6 +50,7 @@ class MainWindow(tk.Frame):
         self.times = []
         self.flow1_data = {'sp': [], 'pv': []}
         self.flow2_data = {'sp': [], 'pv': []}
+        self.conc_data = {'target': [], 'actual': []}  # Add concentration data
         
         # Setup UI components
         self.setup_gui()
