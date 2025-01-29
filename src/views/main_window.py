@@ -18,7 +18,22 @@ class MainWindow(tk.Frame):
         self.controller = controller
         self.settings = settings
         
-        self.data_logger = DataLogger()
+        # Set window to full screen
+        self.parent.attributes('-fullscreen', True)
+        # Add escape key binding to exit full screen
+        self.parent.bind('<Escape>', lambda e: self.parent.attributes('-fullscreen', False))
+        
+        # Configure styling
+        self.style = ttk.Style()
+        self.style.configure('TLabel', font=('Helvetica', 12))
+        self.style.configure('TButton', font=('Helvetica', 12), padding=5)
+        self.style.configure('TEntry', font=('Helvetica', 12))
+        self.style.configure('TLabelframe', font=('Helvetica', 12, 'bold'))
+        
+        # Configure grid weights
+        self.parent.grid_rowconfigure(0, weight=1)
+        self.parent.grid_columnconfigure(0, weight=1)
+        
         # Initialize storage
         self.reading_labels: Dict = {}
         self.status_labels: Dict = {}
@@ -50,13 +65,27 @@ class MainWindow(tk.Frame):
         self.status_labels['Status'].config(text=message, foreground=color)
 
     def setup_gui(self):
-        # Apply font settings
-        style = ttk.Style()
-        style.configure('.', font=self.default_font)
-        # Create main frames
-        self.concentration_frame = ttk.LabelFrame(self, text="Concentration Control")
-        self.flow_frame = ttk.LabelFrame(self, text="Direct Flow Control")
+        # Create main container with padding
+        main_container = ttk.Frame(self, padding="10")
+        main_container.grid(row=0, column=0, sticky="nsew")
         
+        # Configure grid weights
+        main_container.grid_columnconfigure(1, weight=1)
+        main_container.grid_rowconfigure(1, weight=1)
+        
+        # Create frames with better styling
+        self.concentration_frame = ttk.LabelFrame(
+            main_container, 
+            text="Concentration Control",
+            padding="10"
+        )
+        self.flow_frame = ttk.LabelFrame(
+            main_container, 
+            text="Direct Flow Control",
+            padding="10"
+        )
+        
+        # Position frames
         self.concentration_frame.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
         self.flow_frame.grid(row=0, column=1, padx=10, pady=5, sticky="nsew")
         
@@ -90,19 +119,23 @@ class MainWindow(tk.Frame):
             
 
     def setup_instrument_controls(self, parent: ttk.Frame, addr: int):
-        """Setup instrument control panel with labels and entry"""
-        # Flow setter
-        ttk.Label(parent, text="Set Flow:").grid(row=0, column=0, padx=5, pady=2)
-        entry = ttk.Entry(parent, width=10)
-        entry.grid(row=0, column=1, padx=5, pady=2)
-        ttk.Label(parent, text="ln/min").grid(row=0, column=2, padx=2, pady=2)
+        control_frame = ttk.Frame(parent, padding="5")
+        control_frame.pack(fill=tk.X, expand=True)
         
-        ttk.Button(parent, 
-                  text="Set",
-                  command=lambda: self.set_flow(addr, entry.get())).grid(
-            row=0, column=3, padx=5, pady=2)
-            
-        # Reading displays
+        # Flow setter with better layout
+        ttk.Label(control_frame, text="Set Flow:", width=10).grid(row=0, column=0, padx=5, pady=2)
+        entry = ttk.Entry(control_frame, width=10)
+        entry.grid(row=0, column=1, padx=5, pady=2)
+        ttk.Label(control_frame, text="ln/min", width=6).grid(row=0, column=2, padx=2, pady=2)
+        
+        set_button = ttk.Button(
+            control_frame,
+            text="Set",
+            command=lambda: self.set_flow(addr, entry.get())
+        )
+        set_button.grid(row=0, column=3, padx=5, pady=2)
+
+        # Reading displays with better styling
         self.reading_labels[addr] = {}
         params = [
             ('Flow', 'ln/min'),
@@ -111,14 +144,20 @@ class MainWindow(tk.Frame):
         ]
         
         for i, (param, unit) in enumerate(params):
-            ttk.Label(parent, text=f"{param}:").grid(
-                row=i+1, column=0, padx=5, pady=2)
+            frame = ttk.Frame(control_frame)
+            frame.grid(row=i+1, column=0, columnspan=4, sticky='ew', pady=2)
+            
+            ttk.Label(frame, text=f"{param}:", width=10).pack(side=tk.LEFT, padx=5)
             self.reading_labels[addr][param] = ttk.Label(
-                parent, text="---", width=10)
-            self.reading_labels[addr][param].grid(
-                row=i+1, column=1, columnspan=2, padx=5, pady=2)
-            ttk.Label(parent, text=unit).grid(
-                row=i+1, column=3, padx=2, pady=2)
+                frame, 
+                text="---",
+                width=10,
+                background='white',
+                relief='sunken',
+                anchor='center'
+            )
+            self.reading_labels[addr][param].pack(side=tk.LEFT, padx=5)
+            ttk.Label(frame, text=unit, width=6).pack(side=tk.LEFT, padx=2)
             
     def calculate_flows(self):
         """Calculate flows with input validation"""
@@ -200,21 +239,25 @@ class MainWindow(tk.Frame):
                 print(f"Debug - Update error for {addr}: {e}")
                 
     def setup_plots(self):
-        plot_frame = ttk.LabelFrame(self, text="Flow Monitoring")
+        plot_frame = ttk.LabelFrame(self, text="Flow Monitoring", padding="10")
         plot_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
         
-        # Create figure with three subplots
-        self.fig = Figure(figsize=(12, 4))
-        self.ax1 = self.fig.add_subplot(131)  # Flow 1
-        self.ax2 = self.fig.add_subplot(132)  # Flow 2
-        self.ax3 = self.fig.add_subplot(133)  # Concentration
+        # Larger figure size for full screen
+        self.fig = Figure(figsize=(16, 6))
+        self.ax1 = self.fig.add_subplot(131)
+        self.ax2 = self.fig.add_subplot(132)
+        self.ax3 = self.fig.add_subplot(133)
         
-        # Initialize concentration data
-        self.conc_data = {'target': [], 'actual': []}
+        # Style plots
+        for ax in [self.ax1, self.ax2, self.ax3]:
+            ax.grid(True, linestyle='--', alpha=0.7)
+            ax.set_facecolor('#f8f9fa')
+        
+        self.fig.set_facecolor('#ffffff')
         
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
     def start_updates(self):
         def update():
