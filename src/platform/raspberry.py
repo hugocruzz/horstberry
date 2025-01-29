@@ -1,6 +1,7 @@
 import os
+from typing import Dict, Any
 from .base import PlatformInterface
-from ..configs.raspberry_config import DISPLAY_CONFIG, CONNECTION_CONFIG
+from ..configs.raspberry_config import CONNECTION_CONFIG
 
 class RaspberryPlatform(PlatformInterface):
     """Raspberry Pi specific platform implementation"""
@@ -8,8 +9,14 @@ class RaspberryPlatform(PlatformInterface):
     def get_connection_settings(self):
         return CONNECTION_CONFIG
     
-    def get_display_settings(self):
-        return DISPLAY_CONFIG
+    def get_display_settings(self) -> Dict[str, Any]:
+        return {
+            'width': 1280,
+            'height': 800,
+            'font_family': 'Helvetica',
+            'font_size': 12,
+            'scaling': 1.0  # Display scaling factor
+        }
     
     def setup_platform(self):
         # Raspberry Pi specific setup
