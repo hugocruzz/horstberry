@@ -1,5 +1,5 @@
 import propar
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 from src.models.calculations import calculate_flows_variable
 class FlowController:
