@@ -8,7 +8,16 @@ def main():
     
     platform_interface = get_platform()
     settings = platform_interface.get_display_settings()
-    root.geometry(f"{settings['width']}x{settings['height']}")
+    
+    # Force specific window size
+    root.geometry(f"{settings['width']}x{settings['height']}+0+0")
+    root.update_idletasks()
+    
+    # Disable resizing and full screen
+    root.resizable(False, False)
+    
+    # Set DPI scaling
+    root.tk.call('tk', 'scaling', settings.get('scaling', 1.0))
     
     connection_settings = platform_interface.get_connection_settings()
     flow_controller = FlowController(

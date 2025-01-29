@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 import numpy as np
 from ..models.data_logger import DataLogger
 from ..models.calculations import calculate_real_outflow
+import subprocess
+import platform
 
 class MainWindow(tk.Frame):
     def __init__(self, parent: tk.Tk, controller: Any, settings: Dict[str, Any]):
@@ -57,6 +59,10 @@ class MainWindow(tk.Frame):
         self.setup_plots()
         self.start_updates()
         self.pack(fill=tk.BOTH, expand=True)
+
+        self.is_raspberry = platform.system() == 'Linux'
+        if self.is_raspberry:
+            self.setup_touch_keyboard()
 
     def update_status(self, message: str, color: str = "black"):
         """Update status message"""
@@ -338,3 +344,16 @@ class MainWindow(tk.Frame):
         
         self.fig.tight_layout()
         self.canvas.draw()
+
+    def setup_touch_keyboard(self):
+        def show_keyboard(event):
+            subprocess.Popen(['onboard'])
+            
+        def hide_keyboard(event):
+            subprocess.Popen(['pkill', 'onboard'])
+            
+        # Bind to entry focus events
+        for entry in self.winfo_children():
+            if isinstance(entry, tk.Entry):
+                entry.bind('<FocusIn>', show_keyboard)
+                entry.bind('<FocusOut>', hide_keyboard)

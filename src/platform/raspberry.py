@@ -11,16 +11,19 @@ class RaspberryPlatform(PlatformInterface):
     
     def get_display_settings(self) -> Dict[str, Any]:
         return {
-            'width': 1280,
-            'height': 800,
+            'width': 1024,        # Reduced from 1280
+            'height': 600,        # Reduced from 800
             'font_family': 'Helvetica',
-            'font_size': 12,
-            'scaling': 1.0  # Display scaling factor
+            'font_size': 10,      # Smaller font
+            'scaling': 0.8,       # Scale down UI elements
+            'dpi': 96            # Force DPI setting
         }
     
     def setup_platform(self):
         # Raspberry Pi specific setup
         os.environ['DISPLAY'] = ':0'  # Ensure display is set
+        os.environ['GDK_SCALE'] = '1'
+        os.environ['GDK_DPI_SCALE'] = '0.8'
         
         # Set up touchscreen if needed
         try:
