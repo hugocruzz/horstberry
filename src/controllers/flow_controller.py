@@ -30,18 +30,19 @@ class FlowController:
         except ValueError as e:
             raise ValueError(f"Flow calculation error: {e}")
         
-    def get_readings(self, address: int) -> dict:
+    def get_readings(self, address: int) -> Dict[str, Any]:
         """Get all readings from an instrument"""
         try:
-            return {
+            readings = {
                 'Flow': self.read_flow(address),
                 'Valve': self.read_valve(address),
                 'Temperature': self.read_temperature(address)
             }
+            print(f"Debug - Readings for {address}: {readings}")  # Debug print
+            return readings
         except Exception as e:
             print(f"Error getting readings: {e}")
             return {'Flow': None, 'Valve': None, 'Temperature': None}
-        
     def initialize_instruments(self, port: str, addresses: list) -> None:
         """Connect to all instruments"""
         for addr in addresses:

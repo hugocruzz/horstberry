@@ -121,15 +121,32 @@ class MainWindow(tk.Frame):
                 row=i+1, column=3, padx=2, pady=2)
             
     def calculate_flows(self):
+        """Calculate flows with input validation"""
         try:
+            # Get values with validation
+            values = {}
+            for key in ['C_tot_ppm', 'C1_ppm', 'C2_ppm']:
+                try:
+                    value = self.variables[key].get()
+                    if value == "":
+                        raise ValueError(f"{key} cannot be empty")
+                    values[key] = float(value)
+                except (ValueError, tk.TclError) as e:
+                    self.update_status(f"Invalid input for {key}", "red")
+                    return
+
+            # Calculate flows
             flows = self.controller.calculate_flows(
-                self.variables['C_tot_ppm'].get(),
-                self.variables['C1_ppm'].get(),
-                self.variables['C2_ppm'].get()
+                values['C_tot_ppm'],
+                values['C1_ppm'],
+                values['C2_ppm']
             )
-            self.update_status(f"Calculated: Q1={flows['Q1']:.3f}, Q2={flows['Q2']:.3f} ln/min")
+            self.update_status(
+                f"Calculated: Q1={flows['Q1']:.3f}, Q2={flows['Q2']:.3f} ln/min")
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
+        except Exception as e:
+            self.update_status(f"Calculation error: {str(e)}", "red")
             
     def start_updates(self):
         """Start periodic updates of instrument readings"""
@@ -164,17 +181,24 @@ class MainWindow(tk.Frame):
     def update_readings(self):
         """Update all instrument readings"""
         for addr in [5, 8]:
-            readings = self.controller.get_readings(addr)
-            if readings:
-                # Update each parameter's display
+            try:
+                readings = self.controller.get_readings(addr)
+                print(f"Debug - Got readings for {addr}: {readings}")  # Debug print
+                
                 for param in ['Flow', 'Valve', 'Temperature']:
+                    label = self.reading_labels.get(addr, {}).get(param)
+                    if label is None:
+                        print(f"Debug - Missing label for {addr} {param}")
+                        continue
+                        
                     value = readings.get(param)
                     if value is not None:
-                        self.reading_labels[addr][param].config(
-                            text=f"{value:.3f}")
+                        label.config(text=f"{value:.3f}")
                     else:
-                        self.reading_labels[addr][param].config(
-                            text="Error")
+                        label.config(text="Error")
+            except Exception as e:
+                print(f"Debug - Update error for {addr}: {e}")
+                
     def setup_plots(self):
         plot_frame = ttk.LabelFrame(self, text="Flow Monitoring")
         plot_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
@@ -194,6 +218,7 @@ class MainWindow(tk.Frame):
 
     def start_updates(self):
         def update():
+            self.update_readings()
             self.update_plots()
             self.after(1000, update)  # Schedule next update
         update()  # Start the update loop

@@ -2,6 +2,11 @@
 
 A Python interface for Bronkhorst flow controllers with concentration mixing capabilities.
 
+## To do:
+- Apply a moving average with 10 second window
+- Calculate target ppm based on flow1 and 2
+- Show dynamic flow as number additionnaly to the graph.
+
 ## Features
 
 - Real-time flow control and monitoring
@@ -15,8 +20,8 @@ A Python interface for Bronkhorst flow controllers with concentration mixing cap
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/pyhorst.git
-cd pyhorst
+git clone https://github.com/hugocruzz/horstberry.git
+cd horstberry
 ```
 
 # Install dependencies
@@ -35,6 +40,22 @@ python main.py
 # Run on Raspberry Pi
 python3 main.py
 ```
+Making scripts exececutable for git operations:
+
+```
+chmod +x commit_push.sh update_project.sh
+```
+
+Update:
+```bash
+./update_project.sh
+```
+
+Add commit and push:
+```bash
+./commit_push.sh "Your commit message here"
+```
+
 # Flow Control Methods
 Direct Flow Control:
 
