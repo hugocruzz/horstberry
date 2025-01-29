@@ -161,7 +161,10 @@ class MainWindow(tk.Frame):
             ttk.Label(frame, text=unit, width=6).pack(side=tk.LEFT, padx=2)
             
     def calculate_flows(self):
-        """Calculate flows with input validation"""
+        if not self.controller.is_connected():
+            self.update_status("Please connect the instruments", "red")
+            return
+            
         try:
             # Get values with validation
             values = {}
@@ -267,6 +270,10 @@ class MainWindow(tk.Frame):
             self.after(1000, update)  # Schedule next update
         update()  # Start the update loop
     def update_plots(self):
+        if not self.controller.is_connected():
+            self.update_status("Please connect the instruments", "red")
+            return
+            
         # Get current readings and setpoints
         flow1 = self.controller.get_readings(5).get('Flow', 0)
         flow2 = self.controller.get_readings(8).get('Flow', 0)

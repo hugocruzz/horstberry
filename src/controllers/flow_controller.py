@@ -5,6 +5,7 @@ from src.models.calculations import calculate_flows_variable
 class FlowController:
     def __init__(self, port: str, addresses: list = [5, 8]):
         self.instruments = {}
+        self.connected = False
         self.initialize_instruments(port, addresses)
         self.max_flow = 1.5
         self.setpoints = {5: 0.0, 8: 0.0}  # Track setpoints
@@ -44,13 +45,19 @@ class FlowController:
             print(f"Error getting readings: {e}")
             return {'Flow': None, 'Valve': None, 'Temperature': None}
     def initialize_instruments(self, port: str, addresses: list) -> None:
-        """Connect to all instruments"""
-        for addr in addresses:
-            try:
+        try:
+            for addr in addresses:
                 self.instruments[addr] = propar.instrument(port, addr)
-            except Exception as e:
-                print(f"Error connecting to instrument {addr}: {e}")
-    
+                # Test connection by reading a parameter
+                self.instruments[addr].readParameter(1)
+            self.connected = True
+        except Exception as e:
+            print(f"Error connecting to instruments: {e}")
+            self.connected = False
+            
+    def is_connected(self) -> bool:
+        return self.connected
+
     def read_flow(self, address: int) -> Optional[float]:
         """Read current flow in ln/min"""
         try:
