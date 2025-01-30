@@ -20,17 +20,21 @@ class MainWindow(tk.Frame):
         self.controller = controller
         self.settings = settings
         
-        # Set window to full screen
-        self.parent.attributes('-fullscreen', True)
-        # Add escape key binding to exit full screen
-        self.parent.bind('<Escape>', lambda e: self.parent.attributes('-fullscreen', False))
+        # Configure window size and position
+        window_width = self.settings.get('width', 1024)
+        window_height = self.settings.get('height', 600)
+        screen_width = self.parent.winfo_screenwidth()
+        screen_height = self.parent.winfo_screenheight()
+        center_x = int(screen_width/2 - window_width/2)
+        center_y = int(screen_height/2 - window_height/2)
+        self.parent.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
         
-        # Configure styling
+        # Configure styling with larger fonts
         self.style = ttk.Style()
-        self.style.configure('TLabel', font=('Helvetica', 12))
-        self.style.configure('TButton', font=('Helvetica', 12), padding=5)
-        self.style.configure('TEntry', font=('Helvetica', 12))
-        self.style.configure('TLabelframe', font=('Helvetica', 12, 'bold'))
+        self.style.configure('TLabel', font=('Helvetica', 14))
+        self.style.configure('TButton', font=('Helvetica', 14), padding=8)
+        self.style.configure('TEntry', font=('Helvetica', 14))
+        self.style.configure('TLabelframe', font=('Helvetica', 14, 'bold'))
         
         # Configure grid weights
         self.parent.grid_rowconfigure(0, weight=1)

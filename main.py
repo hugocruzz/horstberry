@@ -9,12 +9,15 @@ def main():
     platform_interface = get_platform()
     settings = platform_interface.get_display_settings()
     
-    # Force specific window size
+    # Set initial window size
     root.geometry(f"{settings['width']}x{settings['height']}+0+0")
     root.update_idletasks()
     
-    # Disable resizing and full screen
-    root.resizable(False, False)
+    # Set minimum window size
+    root.minsize(800, 600)
+    
+    # Allow window resizing
+    root.resizable(True, True)
     
     # Set DPI scaling
     root.tk.call('tk', 'scaling', settings.get('scaling', 1.0))
