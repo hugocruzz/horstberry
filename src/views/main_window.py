@@ -296,6 +296,7 @@ class MainWindow(tk.Frame):
                 print(f"Debug - Update error for {addr}: {e}")
                 
     def setup_plots(self):
+        """Set up the plot area"""
         plot_frame = ttk.LabelFrame(self, text="Flow Monitoring", padding="10")
         plot_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
         
@@ -315,6 +316,35 @@ class MainWindow(tk.Frame):
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Add toolbar (optional)
+        from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
+        toolbar = NavigationToolbar2Tk(self.canvas, plot_frame)
+        toolbar.update()
+        
+        # Initial empty plots
+        self.ax1.set_title('Flow 1')
+        self.ax1.set_ylabel('ln/min')
+        self.ax1.text(0.5, 0.5, 'Waiting for data...', 
+                     horizontalalignment='center',
+                     verticalalignment='center',
+                     transform=self.ax1.transAxes)
+        
+        self.ax2.set_title('Flow 2')
+        self.ax2.set_ylabel('ln/min')
+        self.ax2.text(0.5, 0.5, 'Waiting for data...', 
+                     horizontalalignment='center',
+                     verticalalignment='center',
+                     transform=self.ax2.transAxes)
+        
+        self.ax3.set_title('Concentration')
+        self.ax3.set_ylabel('ppm')
+        self.ax3.text(0.5, 0.5, 'Waiting for data...', 
+                     horizontalalignment='center',
+                     verticalalignment='center',
+                     transform=self.ax3.transAxes)
+        
+        self.canvas.draw()
 
     def start_updates(self):
         def update():
@@ -348,7 +378,8 @@ class MainWindow(tk.Frame):
                 # Check if we have valid readings
                 if flow1 is None:
                     flow1, sp1 = 0, 0
-            except Exception:
+            except Exception as e:
+                print(f"Error getting readings for instrument 1: {e}")
                 flow1, sp1 = 0, 0
                 
             try:
@@ -359,7 +390,8 @@ class MainWindow(tk.Frame):
                 # Check if we have valid readings
                 if flow2 is None:
                     flow2, sp2 = 0, 0
-            except Exception:
+            except Exception as e:
+                print(f"Error getting readings for instrument 2: {e}")
                 flow2, sp2 = 0, 0
             
             # Calculate actual concentration
@@ -384,9 +416,120 @@ class MainWindow(tk.Frame):
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
             
-            # Rest of the plotting code remains unchanged...
+            # Limit data points to avoid memory issues
+            max_points = 300  # 5 minutes at 1 second update rate
+            if len(self.times) > max_points:
+                self.times = self.times[-max_points:]
+                self.flow1_data['pv'] = self.flow1_data['pv'][-max_points:]
+                self.flow1_data['sp'] = self.flow1_data['sp'][-max_points:]
+                self.flow2_data['pv'] = self.flow2_data['pv'][-max_points:]
+                self.flow2_data['sp'] = self.flow2_data['sp'][-max_points:]
+                self.conc_data['target'] = self.conc_data['target'][-max_points:]
+                self.conc_data['actual'] = self.conc_data['actual'][-max_points:]
+            
+            # Calculate window for last 60 seconds of data
+            window_cutoff = now - timedelta(seconds=60)
+            
+            # Find index for 60-second window
+            window_indices = []
+            window_times = []
+            for i, t in enumerate(self.times):
+                if t >= window_cutoff:
+                    window_indices.append(i)
+                    window_times.append(t)
+            
+            # If we don't have any data in our window yet, use all available data
+            if not window_indices:
+                window_indices = list(range(len(self.times)))
+                window_times = self.times.copy()
+            
+            # Extract data for the window
+            window_flow1_pv = [self.flow1_data['pv'][i] for i in window_indices]
+            window_flow1_sp = [self.flow1_data['sp'][i] for i in window_indices]
+            window_flow2_pv = [self.flow2_data['pv'][i] for i in window_indices]
+            window_flow2_sp = [self.flow2_data['sp'][i] for i in window_indices]
+            window_conc_target = [self.conc_data['target'][i] for i in window_indices]
+            window_conc_actual = [self.conc_data['actual'][i] for i in window_indices]
+            
+            # Format time for x-axis
+            times_formatted = [t.strftime('%H:%M:%S') for t in window_times]
+            
+            # Use indices for plotting (0 to len(window_data))
+            plot_indices = list(range(len(window_indices)))
+            
+            # Clear and redraw plots
+            self.ax1.clear()
+            self.ax2.clear()
+            self.ax3.clear()
+            
+            # Plot flow 1
+            self.ax1.plot(plot_indices, window_flow1_pv, 'b-', label='Actual')
+            self.ax1.plot(plot_indices, window_flow1_sp, 'r--', label='Setpoint')
+            self.ax1.set_title(f'Flow 1 (Addr: {address_1})')
+            self.ax1.set_ylabel('ln/min')
+            self.ax1.legend(loc='best')
+            self.ax1.grid(True, linestyle='--', alpha=0.7)
+
+            # Only show a few x-axis labels to avoid crowding
+            if len(times_formatted) > 6:
+                step = max(1, len(times_formatted) // 6)
+                visible_indices = list(range(0, len(times_formatted), step))
+                visible_labels = [times_formatted[i] for i in visible_indices]
+                self.ax1.set_xticks([plot_indices[i] for i in visible_indices])
+                self.ax1.set_xticklabels(visible_labels, rotation=45)
+            else:
+                self.ax1.set_xticks(plot_indices)
+                self.ax1.set_xticklabels(times_formatted, rotation=45)
+
+            # Set x-axis label
+            self.ax1.set_xlabel('Last 60 seconds')
+
+            # Plot flow 2
+            self.ax2.plot(plot_indices, window_flow2_pv, 'g-', label='Actual')
+            self.ax2.plot(plot_indices, window_flow2_sp, 'r--', label='Setpoint')
+            self.ax2.set_title(f'Flow 2 (Addr: {address_2})')
+            self.ax2.set_ylabel('ln/min')
+            self.ax2.legend(loc='best')
+            self.ax2.grid(True, linestyle='--', alpha=0.7)
+            
+            # Only show a few x-axis labels to avoid crowding
+            if len(times_formatted) > 6:
+                self.ax2.set_xticks([plot_indices[i] for i in visible_indices])
+                self.ax2.set_xticklabels(visible_labels, rotation=45)
+            else:
+                self.ax2.set_xticks(plot_indices)
+                self.ax2.set_xticklabels(times_formatted, rotation=45)
+                
+            # Set x-axis label
+            self.ax2.set_xlabel('Last 60 seconds')
+
+            # Plot concentration
+            self.ax3.plot(plot_indices, window_conc_actual, 'b-', label='Actual')
+            self.ax3.plot(plot_indices, window_conc_target, 'r--', label='Target')
+            self.ax3.set_title('Concentration')
+            self.ax3.set_ylabel('ppm')
+            self.ax3.legend(loc='best')
+            self.ax3.grid(True, linestyle='--', alpha=0.7)
+            
+            # Only show a few x-axis labels to avoid crowding
+            if len(times_formatted) > 6:
+                self.ax3.set_xticks([plot_indices[i] for i in visible_indices])
+                self.ax3.set_xticklabels(visible_labels, rotation=45)
+            else:
+                self.ax3.set_xticks(plot_indices)
+                self.ax3.set_xticklabels(times_formatted, rotation=45)
+                
+            # Set x-axis label
+            self.ax3.set_xlabel('Last 60 seconds')
+                
+            # Adjust layout and draw
+            self.fig.tight_layout()
+            self.canvas.draw()
+            
         except Exception as e:
             print(f"Error updating plots: {e}")
+            import traceback
+            traceback.print_exc()
             # Continue execution to avoid breaking the update loop
 
     def setup_touch_keyboard(self):
