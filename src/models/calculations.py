@@ -29,6 +29,21 @@ def calculate_flows_variable(C_tot_ppm: float, C1_ppm: float, C2_ppm: float,
 
     return Q1, Q2
 
-def calculate_real_outflow(C1, V1, C2,V2):
+def calculate_real_outflow(C1, V1, C2, V2):
+    """Calculate the final concentration based on input concentrations and flow rates.
+    
+    Args:
+        C1: Concentration of first gas (ppm)
+        V1: Flow rate of first gas (ln/min)
+        C2: Concentration of second gas (ppm)
+        V2: Flow rate of second gas (ln/min)
+        
+    Returns:
+        Final concentration (ppm) or 0 if inputs are invalid
+    """
+    # Check for None or invalid values
+    if None in (C1, V1, C2, V2) or (V1 + V2) == 0:
+        return 0
+    
     C_final = (C1*V1 + C2*V2)/(V1+V2)
     return C_final

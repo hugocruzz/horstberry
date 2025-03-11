@@ -2,6 +2,7 @@ import tkinter as tk
 from src.views.main_window import MainWindow
 from src.controllers.flow_controller import FlowController
 from src.platform.platform import get_platform
+
 def main():
     root = tk.Tk()
     root.title("Flow Controller")
@@ -25,8 +26,11 @@ def main():
     connection_settings = platform_interface.get_connection_settings()
     flow_controller = FlowController(
         port=connection_settings['port'],
-        addresses=connection_settings['addresses']
+        addresses=None  # Start with no addresses - will scan later
     )
+    
+    # Store default addresses in settings just for reference
+    settings['default_addresses'] = connection_settings.get('addresses', [None, None])
     
     app = MainWindow(root, flow_controller, settings)
     root.mainloop()

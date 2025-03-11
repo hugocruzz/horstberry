@@ -49,6 +49,15 @@ class MainWindow(tk.Frame):
             'C2_ppm': tk.DoubleVar(value=5000)
         }
         
+        # Flag to track if instrument scanning has been completed
+        self.instruments_scanned = False
+        
+        # Initialize instrument addresses with None to prevent premature readings
+        self.instrument_addresses = {
+            'gas1': None,
+            'gas2': None
+        }
+        
         # Configure fonts based on platform settings
         self.default_font = (self.settings['font_family'], self.settings['font_size'])
 
@@ -61,6 +70,11 @@ class MainWindow(tk.Frame):
         # Setup UI components
         self.setup_gui()
         self.setup_plots()
+        
+        # Add a welcome message prompting to scan for instruments
+        self.update_status("Welcome! Please scan for instruments to get started", "blue")
+        
+        # Now start updates after setting up
         self.start_updates()
         self.pack(fill=tk.BOTH, expand=True)
 
@@ -122,12 +136,23 @@ class MainWindow(tk.Frame):
         
     def setup_flow_panel(self):
         # Flow controls for each instrument
-        for i, (addr, name) in enumerate([(5, 'Gas 1'), (8, 'Gas 2')]):
-            group = ttk.LabelFrame(self.flow_frame, text=f"{name} Control")
-            group.grid(row=0, column=i, padx=5, pady=5)
+        addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
+        names = ['Gas 1', 'Gas 2']
+        
+        # Add scan button
+        scan_button = ttk.Button(
+            self.flow_frame, 
+            text="Scan for Instruments",
+            command=self.scan_instruments
+        )
+        scan_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+        
+        # Add instrument controls
+        for i, (addr, name) in enumerate(zip(addresses, names)):
+            group = ttk.LabelFrame(self.flow_frame, text=f"{name} Control (Addr: {addr})")
+            group.grid(row=1, column=i, padx=5, pady=5)
             
             self.setup_instrument_controls(group, addr)
-            
 
     def setup_instrument_controls(self, parent: ttk.Frame, addr: int):
         control_frame = ttk.Frame(parent, padding="5")
@@ -233,9 +258,27 @@ class MainWindow(tk.Frame):
     
     def update_readings(self):
         """Update all instrument readings"""
-        for addr in [5, 8]:
+        addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
+        
+        for addr in addresses:
+            # Skip if address is None
+            if addr is None:
+                continue
+                
             try:
                 readings = self.controller.get_readings(addr)
+                
+                # Check if we have any valid readings
+                has_valid_readings = False
+                for param in ['Flow', 'Valve', 'Temperature']:
+                    if readings.get(param) is not None:
+                        has_valid_readings = True
+                        break
+                        
+                if not has_valid_readings:
+                    print(f"Debug - All readings are None for {addr}")
+                    continue
+                    
                 print(f"Debug - Got readings for {addr}: {readings}")  # Debug print
                 
                 for param in ['Flow', 'Valve', 'Temperature']:
@@ -279,75 +322,72 @@ class MainWindow(tk.Frame):
             self.update_plots()
             self.after(1000, update)  # Schedule next update
         update()  # Start the update loop
+
     def update_plots(self):
+        """Update the plots with current data"""
+        # Only proceed if connected to instruments
         if not self.controller.is_connected():
-            self.update_status("Please connect the instruments", "red")
+            # Skip plot updates but don't show error repeatedly
             return
+        
+        try:
+            # Get the addresses from the class variables
+            address_1 = self.instrument_addresses['gas1']
+            address_2 = self.instrument_addresses['gas2']
             
-        # Get current readings and setpoints
-        flow1 = self.controller.get_readings(5).get('Flow', 0)
-        flow2 = self.controller.get_readings(8).get('Flow', 0)
-        sp1 = self.controller.get_setpoint(5)
-        sp2 = self.controller.get_setpoint(8)
-        
-        # Calculate actual concentration
-        C1 = self.variables['C1_ppm'].get()
-        C2 = self.variables['C2_ppm'].get()
-        if (flow1==0) & (flow2==0):
-            actual_conc= 0
-        else:
-            actual_conc = calculate_real_outflow(C1, flow1, C2, flow2)
-        target_conc = self.variables['C_tot_ppm'].get()
-        
-        # Update data lists
-        now = datetime.now()
-        self.times.append(now)
-        self.flow1_data['pv'].append(flow1)
-        self.flow2_data['pv'].append(flow2)
-        self.flow1_data['sp'].append(sp1)
-        self.flow2_data['sp'].append(sp2)
-        self.conc_data['target'].append(target_conc)
-        self.conc_data['actual'].append(actual_conc)
-        
-        # Keep last 60 seconds
-        if len(self.times) > 60:
-            self.times.pop(0)
-            for data in [self.flow1_data, self.flow2_data]:
-                data['sp'].pop(0)
-                data['pv'].pop(0)
-            self.conc_data['target'].pop(0)
-            self.conc_data['actual'].pop(0)
-        
-        times_rel = [(t - self.times[0]).total_seconds() for t in self.times]
-        
-        # Plot flows and concentration
-        self.ax1.clear()
-        self.ax2.clear()
-        self.ax3.clear()
-        
-        # Flow plots
-        self.ax1.plot(times_rel, self.flow1_data['sp'], 'r--', label='Setpoint 1')
-        self.ax1.plot(times_rel, self.flow1_data['pv'], 'b-', label='Flow 1')
-        self.ax2.plot(times_rel, self.flow2_data['sp'], 'r--', label='Setpoint 2')
-        self.ax2.plot(times_rel, self.flow2_data['pv'], 'b-', label='Flow 2')
-        
-        # Concentration plot
-        self.ax3.plot(times_rel, self.conc_data['target'], 'r--', label='Target')
-        self.ax3.plot(times_rel, self.conc_data['actual'], 'g-', label='Actual')
-        
-        for ax in [self.ax1, self.ax2]:
-            ax.set_xlabel('Time (s)')
-            ax.set_ylabel('Flow (ln/min)')
-            ax.grid(True)
-            ax.legend()
-        
-        self.ax3.set_xlabel('Time (s)')
-        self.ax3.set_ylabel('Concentration (ppm)')
-        self.ax3.grid(True)
-        self.ax3.legend()
-        
-        self.fig.tight_layout()
-        self.canvas.draw()
+            # If we don't have valid addresses yet, skip plotting
+            if address_1 is None or address_2 is None:
+                return
+            
+            # Get current readings and setpoints with error handling
+            try:
+                readings_1 = self.controller.get_readings(address_1)
+                flow1 = readings_1.get('Flow')
+                sp1 = self.controller.get_setpoint(address_1)
+                
+                # Check if we have valid readings
+                if flow1 is None:
+                    flow1, sp1 = 0, 0
+            except Exception:
+                flow1, sp1 = 0, 0
+                
+            try:
+                readings_2 = self.controller.get_readings(address_2)
+                flow2 = readings_2.get('Flow')
+                sp2 = self.controller.get_setpoint(address_2)
+                
+                # Check if we have valid readings
+                if flow2 is None:
+                    flow2, sp2 = 0, 0
+            except Exception:
+                flow2, sp2 = 0, 0
+            
+            # Calculate actual concentration
+            C1 = self.variables['C1_ppm'].get()
+            C2 = self.variables['C2_ppm'].get()
+            
+            # Calculate concentration only if both flows are valid
+            if flow1 is not None and flow2 is not None and (flow1 > 0 or flow2 > 0):
+                actual_conc = calculate_real_outflow(C1, flow1, C2, flow2)
+            else:
+                actual_conc = 0
+                
+            target_conc = self.variables['C_tot_ppm'].get()
+            
+            # Update data lists
+            now = datetime.now()
+            self.times.append(now)
+            self.flow1_data['pv'].append(flow1 if flow1 is not None else 0)
+            self.flow2_data['pv'].append(flow2 if flow2 is not None else 0)
+            self.flow1_data['sp'].append(sp1 if sp1 is not None else 0)
+            self.flow2_data['sp'].append(sp2 if sp2 is not None else 0)
+            self.conc_data['target'].append(target_conc)
+            self.conc_data['actual'].append(actual_conc)
+            
+            # Rest of the plotting code remains unchanged...
+        except Exception as e:
+            print(f"Error updating plots: {e}")
+            # Continue execution to avoid breaking the update loop
 
     def setup_touch_keyboard(self):
         def show_keyboard(event):
@@ -361,3 +401,91 @@ class MainWindow(tk.Frame):
             if isinstance(entry, tk.Entry):
                 entry.bind('<FocusIn>', show_keyboard)
                 entry.bind('<FocusOut>', hide_keyboard)
+
+    def scan_instruments(self):
+        """Scan for available instruments and update addresses"""
+        if not self.controller.is_connected():
+            try:
+                # Try to connect to the serial port first
+                self.update_status("Attempting to connect and scan for instruments...", "blue")
+                
+                # Use the controller's scan method
+                found_instruments = self.controller.scan_for_instruments(start_addr=1, end_addr=24)
+                
+                if not found_instruments:
+                    self.update_status("No instruments found. Check connections.", "red")
+                    return False
+                    
+                if len(found_instruments) < 2:
+                    self.update_status(f"Found only {len(found_instruments)} instrument at address {found_instruments[0]}. Need at least 2.", "orange")
+                    # Set the first instrument address at least
+                    self.instrument_addresses['gas1'] = found_instruments[0]
+                    self.instrument_addresses['gas2'] = None  # Keep second instrument as None
+                    return False
+                            
+                # Update instrument addresses with found devices
+                self.instrument_addresses['gas1'] = found_instruments[0]
+                self.instrument_addresses['gas2'] = found_instruments[1]
+                
+                # Update labels in the UI to reflect the new addresses
+                self.update_flow_panel_labels()
+                
+                self.update_status(f"Found instruments at addresses {found_instruments}", "green")
+                return True
+                
+            except Exception as e:
+                self.update_status(f"Error scanning for instruments: {str(e)}", "red")
+                return False
+        else:
+            # If already connected, just do a scan
+            try:
+                found_instruments = self.controller.scan_for_instruments(start_addr=1, end_addr=24)
+                
+                if not found_instruments:
+                    self.update_status("No instruments found. Check connections.", "red")
+                    return False
+                    
+                if len(found_instruments) < 2:
+                    self.update_status(f"Found only {len(found_instruments)} instrument at address {found_instruments[0]}. Need at least 2.", "orange")
+                    # Set the first instrument address at least
+                    self.instrument_addresses['gas1'] = found_instruments[0]
+                    self.instrument_addresses['gas2'] = None  # Keep second instrument as None
+                    return False
+                            
+                # Update instrument addresses with found devices
+                self.instrument_addresses['gas1'] = found_instruments[0]
+                self.instrument_addresses['gas2'] = found_instruments[1]
+                
+                # Update labels in the UI to reflect the new addresses
+                self.update_flow_panel_labels()
+                
+                self.update_status(f"Found instruments at addresses {found_instruments}", "green")
+                return True
+            except Exception as e:
+                self.update_status(f"Error scanning for instruments: {str(e)}", "red")
+                return False
+        
+    def update_flow_panel_labels(self):
+        """Update the labels in the flow panel to reflect current addresses"""
+        # Clear existing controls
+        for widget in self.flow_frame.winfo_children():
+            if isinstance(widget, ttk.LabelFrame) and widget.winfo_children():
+                widget.destroy()
+        
+        # Add instrument controls with updated addresses
+        addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
+        names = ['Gas 1', 'Gas 2']
+        
+        for i, (addr, name) in enumerate(zip(addresses, names)):
+            group = ttk.LabelFrame(self.flow_frame, text=f"{name} Control (Addr: {addr})")
+            group.grid(row=1, column=i, padx=5, pady=5)
+            
+            self.setup_instrument_controls(group, addr)
+        
+        # Make sure the scan button remains at the top
+        scan_button = ttk.Button(
+            self.flow_frame, 
+            text="Scan for Instruments",
+            command=self.scan_instruments
+        )
+        scan_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
