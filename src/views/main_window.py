@@ -67,6 +67,9 @@ class MainWindow(tk.Frame):
         self.flow2_data = {'sp': [], 'pv': []}
         self.conc_data = {'target': [], 'actual': []}  # Add concentration data
         
+        # Initialize a dict to hold the flow entry widgets for each instrument
+        self.flow_entries = {}
+        
         # Setup UI components
         self.setup_gui()
         self.setup_plots()
@@ -124,22 +127,30 @@ class MainWindow(tk.Frame):
             ttk.Label(self.concentration_frame, text=f"{key}:").grid(
                 row=row, column=0, padx=5, pady=5)
             ttk.Entry(self.concentration_frame, 
-                     textvariable=self.variables[key]).grid(
+                    textvariable=self.variables[key]).grid(
                 row=row, column=1, padx=5, pady=5)
             row += 1
-            
+
+        # Max flow input
+        ttk.Label(self.concentration_frame, text="Max Flow (ln/min):").grid(
+            row=row, column=0, padx=5, pady=5)
+        self.variables['max_flow'] = tk.DoubleVar(value=1.5)  # Default max flow
+        ttk.Entry(self.concentration_frame, 
+                textvariable=self.variables['max_flow']).grid(
+            row=row, column=1, padx=5, pady=5)
+        row += 1
+
         # Calculate button
         ttk.Button(self.concentration_frame, 
-                  text="Calculate Flows",
-                  command=self.calculate_flows).grid(
+                text="Calculate Flows",
+                command=self.calculate_flows).grid(
             row=row, column=0, columnspan=2, pady=10)
-        
     def setup_flow_panel(self):
-        # Flow controls for each instrument
+        # Flow controls for each instrument remain defined by their address and name
         addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
         names = ['Gas 1', 'Gas 2']
         
-        # Add scan button
+        # Add scan button at the top
         scan_button = ttk.Button(
             self.flow_frame, 
             text="Scan for Instruments",
@@ -147,32 +158,45 @@ class MainWindow(tk.Frame):
         )
         scan_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
         
-        # Add instrument controls
+        # Add instrument controls panels for each instrument
         for i, (addr, name) in enumerate(zip(addresses, names)):
             group = ttk.LabelFrame(self.flow_frame, text=f"{name} Control (Addr: {addr})")
             group.grid(row=1, column=i, padx=5, pady=5)
-            
             self.setup_instrument_controls(group, addr)
+        
+        # Add global Start and Stop buttons below the instrument panels (span both columns)
+        start_button = ttk.Button(
+            self.flow_frame,
+            text="Start",
+            command=self.start_all_flows
+        )
+        start_button.grid(row=2, column=0, padx=5, pady=10, sticky="ew")
+        
+        stop_button = ttk.Button(
+            self.flow_frame,
+            text="Stop",
+            command=self.stop_all_flows
+        )
+        stop_button.grid(row=2, column=1, padx=5, pady=10, sticky="ew")
 
     def setup_instrument_controls(self, parent: ttk.Frame, addr: int):
         control_frame = ttk.Frame(parent, padding="5")
         control_frame.pack(fill=tk.X, expand=True)
         
-        # Flow setter with better layout
+        # Flow setter label and entry
         ttk.Label(control_frame, text="Set Flow:", width=10).grid(row=0, column=0, padx=5, pady=2)
         entry = ttk.Entry(control_frame, width=10)
         entry.grid(row=0, column=1, padx=5, pady=2)
-        ttk.Label(control_frame, text="ln/min", width=6).grid(row=0, column=2, padx=2, pady=2)
+        unit_label = ttk.Label(control_frame, text="ln/min", width=6)  # Default unit
+        unit_label.grid(row=0, column=2, padx=2, pady=2)
         
-        set_button = ttk.Button(
-            control_frame,
-            text="Set",
-            command=lambda: self.set_flow(addr, entry.get())
-        )
-        set_button.grid(row=0, column=3, padx=5, pady=2)
+        # Save the entry and unit label for later use
+        self.flow_entries[addr] = entry
+        if addr not in self.reading_labels:
+            self.reading_labels[addr] = {}
+        self.reading_labels[addr]['Unit'] = unit_label
 
-        # Reading displays with better styling
-        self.reading_labels[addr] = {}
+        # Reading displays
         params = [
             ('Flow', 'ln/min'),
             ('Valve', '%'),
@@ -194,7 +218,6 @@ class MainWindow(tk.Frame):
             )
             self.reading_labels[addr][param].pack(side=tk.LEFT, padx=5)
             ttk.Label(frame, text=unit, width=6).pack(side=tk.LEFT, padx=2)
-            
     def calculate_flows(self):
         if not self.controller.is_connected():
             self.update_status("Please connect the instruments", "red")
@@ -213,14 +236,24 @@ class MainWindow(tk.Frame):
                     self.update_status(f"Invalid input for {key}", "red")
                     return
 
+            # Get max_flow from user input or default to 1.5
+            max_flow = float(self.variables.get('max_flow', tk.DoubleVar(value=1.5)).get())
+
             # Calculate flows
             flows = self.controller.calculate_flows(
                 values['C_tot_ppm'],
                 values['C1_ppm'],
-                values['C2_ppm']
+                values['C2_ppm'],
+                max_flow=max_flow
             )
-            self.update_status(
-                f"Calculated: Q1={flows['Q1']:.3f}, Q2={flows['Q2']:.3f} ln/min")
+            
+            # Display calculated flows with units
+            flow_messages = []
+            for addr, flow in flows.items():
+                unit = self.controller.read_unit(addr)
+                flow_messages.append(f"Q{addr}={flow:.3f} {unit}")
+            
+            self.update_status("Calculated: " + ", ".join(flow_messages))
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
         except Exception as e:
@@ -242,17 +275,17 @@ class MainWindow(tk.Frame):
     def set_flow(self, addr: int, flow_str: str):
         """Set flow for specific instrument"""
         try:
-            # Handle both '.' and ',' decimal separators
             flow = float(flow_str.replace(',', '.'))
+            unit = self.controller.get_readings(addr).get('Unit', 'ln/min')
+            max_flow = 1500 if unit == "ml/min" else 1.5  # Adjust limit based on unit
             
-            if not 0 <= flow <= self.controller.max_flow:
-                raise ValueError(f"Flow must be between 0 and {self.controller.max_flow} ln/min")
+            if not 0 <= flow <= max_flow:
+                raise ValueError(f"Flow must be between 0 and {max_flow} {unit}")
             
             if self.controller.set_flow(addr, flow):
-                self.update_status(f"Flow set to {flow:.3f} ln/min")
+                self.update_status(f"Flow set to {flow:.3f} {unit}")
             else:
                 self.update_status("Failed to set flow", "red")
-                
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
     
@@ -261,40 +294,31 @@ class MainWindow(tk.Frame):
         addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
         
         for addr in addresses:
-            # Skip if address is None
             if addr is None:
                 continue
-                
+            
             try:
                 readings = self.controller.get_readings(addr)
-                
-                # Check if we have any valid readings
-                has_valid_readings = False
-                for param in ['Flow', 'Valve', 'Temperature']:
-                    if readings.get(param) is not None:
-                        has_valid_readings = True
-                        break
-                        
-                if not has_valid_readings:
-                    print(f"Debug - All readings are None for {addr}")
-                    continue
-                    
-                print(f"Debug - Got readings for {addr}: {readings}")  # Debug print
+                unit = readings.get('Unit', 'ln/min')  # Default to ln/min if unit is missing
                 
                 for param in ['Flow', 'Valve', 'Temperature']:
                     label = self.reading_labels.get(addr, {}).get(param)
                     if label is None:
-                        print(f"Debug - Missing label for {addr} {param}")
                         continue
-                        
+                    
                     value = readings.get(param)
                     if value is not None:
                         label.config(text=f"{value:.3f}")
                     else:
                         label.config(text="Error")
-            except Exception as e:
-                print(f"Debug - Update error for {addr}: {e}")
                 
+                # Update the unit label dynamically
+                unit_label = self.reading_labels.get(addr, {}).get('Unit')
+                if unit_label:
+                    unit_label.config(text=unit)
+            except Exception as e:
+                print(f"Error updating readings for {addr}: {e}")
+
     def setup_plots(self):
         """Set up the plot area"""
         plot_frame = ttk.LabelFrame(self, text="Flow Monitoring", padding="10")
@@ -533,17 +557,16 @@ class MainWindow(tk.Frame):
             # Continue execution to avoid breaking the update loop
 
     def setup_touch_keyboard(self):
-        def show_keyboard(event):
-            subprocess.Popen(['onboard'])
-            
-        def hide_keyboard(event):
-            subprocess.Popen(['pkill', 'onboard'])
-            
-        # Bind to entry focus events
-        for entry in self.winfo_children():
-            if isinstance(entry, tk.Entry):
-                entry.bind('<FocusIn>', show_keyboard)
-                entry.bind('<FocusOut>', hide_keyboard)
+        import subprocess
+
+        def bind_keyboard(widget):
+            if isinstance(widget, tk.Entry):
+                widget.bind("<FocusIn>", lambda event: subprocess.Popen(['onboard']))
+                widget.bind("<FocusOut>", lambda event: subprocess.Popen(['pkill', 'onboard']))
+            for child in widget.winfo_children():
+                bind_keyboard(child)
+
+        bind_keyboard(self)
 
     def scan_instruments(self):
         """Scan for available instruments and update addresses"""
@@ -615,6 +638,9 @@ class MainWindow(tk.Frame):
             if isinstance(widget, ttk.LabelFrame) and widget.winfo_children():
                 widget.destroy()
         
+        # Clear the flow_entries dictionary to remove references to old widgets
+        self.flow_entries.clear()
+        
         # Add instrument controls with updated addresses
         addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
         names = ['Gas 1', 'Gas 2']
@@ -632,3 +658,36 @@ class MainWindow(tk.Frame):
             command=self.scan_instruments
         )
         scan_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
+
+    def start_all_flows(self):
+        """Start all flows based on the setpoints in the GUI"""
+        try:
+            for addr, entry in self.flow_entries.items():
+                try:
+                    flow_val = float(entry.get().replace(',', '.'))
+                    max_flow = self.controller.max_flows.get(addr, 1.5)  # Default to 1.5 if not set
+                    
+                    # Validate the flow value against the max flow for the instrument
+                    if not 0 <= flow_val <= max_flow:
+                        raise ValueError(f"Flow must be between 0 and {max_flow} for address {addr}")
+                    
+                    # Set the flow for the instrument
+                    if self.controller.set_flow(addr, flow_val):
+                        print(f"Flow set for address {addr}: {flow_val} (Max Flow: {max_flow})")
+                    else:
+                        print(f"Failed to set flow for address {addr}")
+                except ValueError as e:
+                    print(f"Invalid flow value for address {addr}: {e}")
+                except Exception as e:
+                    print(f"Error setting flow for address {addr}: {e}")
+        except Exception as e:
+            print(f"Error in start_all_flows: {e}")
+
+            
+    def stop_all_flows(self):
+        """Set all instrument flows to zero."""
+        for addr in self.flow_entries.keys():
+            if self.controller.set_flow(addr, 0):
+                self.update_status(f"Flow at address {addr} set to 0 ln/min", "green")
+            else:
+                self.update_status(f"Failed to set flow at address {addr} to 0", "red")

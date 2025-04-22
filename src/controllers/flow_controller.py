@@ -9,7 +9,7 @@ class FlowController:
         self.port = port
         self.instruments = {}
         self.connected = False
-        self.max_flow = 1.5
+        self.max_flows = {}
         self.setpoints = {}  # Track setpoints - will be populated when addresses are known
         
         # Only initialize with provided addresses
@@ -79,10 +79,12 @@ class FlowController:
     def set_flow(self, address: int, flow: float) -> bool:
         """Set flow for a specific instrument"""
         try:
-            percentage = (flow / self.max_flow) * 100
+            max_flow = self.max_flows.get(address, 1.5)  # Default to 1.5 if not set
+            percentage = (flow / max_flow) * 100
             value = int((percentage / 100.0) * 32000)
             self.instruments[address].writeParameter(9, value)
             self.setpoints[address] = flow  # Store setpoint
+            print(f"Debug - Set flow for address {address}: Flow={flow}, Max Flow={max_flow}, Value={value}")
             return True
         except KeyError:
             print(f"Error: No instrument at address {address}")
@@ -94,28 +96,51 @@ class FlowController:
     def get_setpoint(self, address: int) -> float:
         """Get the stored setpoint for a specific instrument"""
         return self.setpoints.get(address, 0.0)
-        
-    def calculate_flows(self, C_tot_ppm: float, C1_ppm: float, C2_ppm: float) -> Dict[str, float]:
-        """Calculate required flows based on concentrations"""
+    
+    def calculate_flows(self, C_tot_ppm: float, C1_ppm: float, C2_ppm: float, max_flow: float = 1.5) -> Dict[str, float]:
+        """Calculate required flows based on concentrations and adjust for units"""
         try:
+            # Calculate flows in ln/min
             Q1, Q2 = calculate_flows_variable(C_tot_ppm, C1_ppm, C2_ppm)
-            return {'Q1': Q1, 'Q2': Q2}
+            
+            # Scale flows based on max_flow
+            Q1 = min(Q1, max_flow)
+            Q2 = min(Q2, max_flow)
+            
+            # Adjust flows based on the unit of each instrument
+            flows = {}
+            for addr, flow in zip(self.instruments.keys(), [Q1, Q2]):
+                unit = self.read_unit(addr)
+                if unit == "ml/min":
+                    flows[f"Q{addr}"] = flow * 1000  # Convert ln/min to ml/min
+                else:
+                    flows[f"Q{addr}"] = flow  # Keep as ln/min
+
+            return flows
         except ValueError as e:
             raise ValueError(f"Flow calculation error: {e}")
-        
+            
     def get_readings(self, address: int) -> Dict[str, Any]:
-        """Get all readings from an instrument"""
+        """Get all readings from an instrument, including the unit"""
         try:
+            unit = self.read_unit(address)
             readings = {
                 'Flow': self.read_flow(address),
                 'Valve': self.read_valve(address),
-                'Temperature': self.read_temperature(address)
+                'Temperature': self.read_temperature(address),
+                'Unit': unit
             }
-            print(f"Debug - Readings for {address}: {readings}")  # Debug print
+            # Adjust max flow limit based on unit
+            if unit == "ml/min":
+                self.max_flows[address] = 10  # 1.5 ln/min = 1500 ml/min
+            else:
+                self.max_flows[address] = 1.5  # Default to ln/min
+
+            print(f"Debug - Readings for {address}: {readings}, Max Flow: {self.max_flows[address]}")  # Debug print
             return readings
         except Exception as e:
             print(f"Error getting readings: {e}")
-            return {'Flow': None, 'Valve': None, 'Temperature': None}
+            return {'Flow': None, 'Valve': None, 'Temperature': None, 'Unit': "ln/min"}
             
     def is_connected(self) -> bool:
         """Check if we have active instrument connections"""
@@ -151,6 +176,10 @@ class FlowController:
     def read_unit(self, address: int) -> str:
         """Read flow unit"""
         try:
-            return self.instruments[address].readParameter(129)
+            unit = self.instruments[address].readParameter(129).strip()  # Trim whitespace
+            if unit == "mln/min":
+                unit = "ml/min"  # Normalize unit
+            return unit
         except:
             return "ln/min"
+
