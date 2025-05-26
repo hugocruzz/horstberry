@@ -686,3 +686,34 @@ class MainWindow(tk.Frame):
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         return fig, ax1, ax2, ax3, canvas
+
+    def open_graph_window(self):
+        """Open the graph in a new window."""
+        graph_win = tk.Toplevel(self)
+        graph_win.title("Flow Monitoring Graphs")
+        graph_win.geometry("1200x500")
+        fig, ax1, ax2, ax3, canvas = self.create_plot_canvas(graph_win)
+
+        # Copy current data to the new axes
+        if self.times:
+            ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
+            ax1.set_title('Flow 1')
+            ax1.set_ylabel('ln/min')
+            ax1.legend(loc='best')
+
+            ax2.plot(self.times, self.flow2_data['pv'], 'g-', label='Measured')
+            ax2.set_title('Flow 2')
+            ax2.set_ylabel('ln/min')
+            ax2.legend(loc='best')
+
+            ax3.plot(self.times, self.conc_data['actual'], 'b-', label='Actual')
+            ax3.plot(self.times, self.conc_data['target'], 'r--', label='Target')
+            ax3.set_title('Concentration')
+            ax3.set_ylabel('ppm')
+            ax3.legend(loc='best')
+            ax3.set_xlabel('Time')
+        else:
+            for ax in [ax1, ax2, ax3]:
+                ax.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
+                        verticalalignment='center', transform=ax.transAxes)
+        canvas.draw()
