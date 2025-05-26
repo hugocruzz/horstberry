@@ -133,6 +133,14 @@ class MainWindow(tk.Frame):
         
         self.setup_concentration_panel()
         self.setup_flow_panel()
+
+        # Add "Show Graph" button at the bottom
+        show_graph_btn = ttk.Button(
+            self.main_container,
+            text="Show Graph",
+            command=self.open_graph_window
+        )
+        show_graph_btn.grid(row=2, column=0, columnspan=2, pady=(10, 0), sticky="ew")
         
     def setup_concentration_panel(self):
         # Concentration inputs
@@ -663,3 +671,18 @@ class MainWindow(tk.Frame):
                 self.update_status(f"Flow at address {addr} set to 0 ln/min", "green")
             else:
                 self.update_status(f"Failed to set flow at address {addr} to 0", "red")
+
+    def create_plot_canvas(self, parent):
+        """Create and return a matplotlib FigureCanvasTkAgg in the given parent."""
+        fig = Figure(figsize=(16, 6))
+        ax1 = fig.add_subplot(131)
+        ax2 = fig.add_subplot(132)
+        ax3 = fig.add_subplot(133)
+        for ax in [ax1, ax2, ax3]:
+            ax.grid(True, linestyle='--', alpha=0.7)
+            ax.set_facecolor('#f8f9fa')
+        fig.set_facecolor('#ffffff')
+        canvas = FigureCanvasTkAgg(fig, master=parent)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        return fig, ax1, ax2, ax3, canvas
