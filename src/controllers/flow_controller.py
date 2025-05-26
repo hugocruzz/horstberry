@@ -132,11 +132,6 @@ class FlowController:
                 'Temperature': self.read_temperature(address),
                 'Unit': unit
             }
-            # Adjust max flow limit based on unit
-            if unit == "ml/min":
-                self.max_flows[address] = 10  # 1.5 ln/min = 1500 ml/min
-            else:
-                self.max_flows[address] = 1.5  # Default to ln/min
 
             print(f"Debug - Readings for {address}: {readings}, Max Flow: {self.max_flows[address]}")  # Debug print
             return readings

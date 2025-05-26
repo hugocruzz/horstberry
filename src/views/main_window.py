@@ -91,12 +91,13 @@ class MainWindow(tk.Frame):
         self.is_raspberry = platform.system() == 'Linux'
 
         # Add a command output window (Text widget) at the bottom, spanning both columns
+        # ...existing code...
         self.command_output = tk.Text(
-            main_container, height=8, width=80, state='disabled',
+            self.main_container, height=8, width=80, state='disabled',
             bg='#f4f4f4', font=('Consolas', 11)
         )
         self.command_output.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
-        main_container.grid_rowconfigure(1, weight=0)
+        self.main_container.grid_rowconfigure(1, weight=0)
 
     def update_status(self, message: str, color: str = "black"):
         """Update status message"""
@@ -107,21 +108,21 @@ class MainWindow(tk.Frame):
 
     def setup_gui(self):
         # Create main container with padding
-        main_container = ttk.Frame(self, padding="10")
-        main_container.grid(row=0, column=0, sticky="nsew")
+        self.main_container = ttk.Frame(self, padding="10")
+        self.main_container.grid(row=0, column=0, sticky="nsew")
         
         # Configure grid weights
-        main_container.grid_columnconfigure(1, weight=1)
-        main_container.grid_rowconfigure(1, weight=1)
+        self.main_container.grid_columnconfigure(1, weight=1)
+        self.main_container.grid_rowconfigure(1, weight=1)
         
         # Create frames with better styling
         self.concentration_frame = ttk.LabelFrame(
-            main_container, 
+            self.main_container, 
             text="Concentration Control",
             padding="10"
         )
         self.flow_frame = ttk.LabelFrame(
-            main_container, 
+            self.main_container, 
             text="Direct Flow Control",
             padding="10"
         )
@@ -413,11 +414,50 @@ class MainWindow(tk.Frame):
             unit1 = readings_1.get('Unit', 'ln/min')
             unit2 = readings_2.get('Unit', 'ln/min')
 
+            # Convert to ln/min if needed
             if unit1 in ("ml/min", "mln/min"):
-                flow1 /= 1000  # Convert ml/min or mln/min to ln/min
+                flow1 /= 1000
             if unit2 in ("ml/min", "mln/min"):
-                flow2 /= 1000  # Convert ml/min or mln/min to ln/min
+                flow2 /= 1000
 
+            # Store flow data for plotting
+            now = datetime.now()
+            self.times.append(now)
+            self.flow1_data['pv'].append(flow1)
+            self.flow2_data['pv'].append(flow2)
+
+            # Limit data points
+            max_points = 300
+            if len(self.times) > max_points:
+                self.times = self.times[-max_points:]
+                self.flow1_data['pv'] = self.flow1_data['pv'][-max_points:]
+                self.flow2_data['pv'] = self.flow2_data['pv'][-max_points:]
+
+            # --- Plot Flow 1 ---
+            self.ax1.clear()
+            self.ax1.set_title('Flow 1')
+            self.ax1.set_ylabel('ln/min')
+            self.ax1.grid(True, linestyle='--', alpha=0.7)
+            if self.flow1_data['pv']:
+                self.ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
+                self.ax1.legend(loc='best')
+            else:
+                self.ax1.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
+                              verticalalignment='center', transform=self.ax1.transAxes)
+
+            # --- Plot Flow 2 ---
+            self.ax2.clear()
+            self.ax2.set_title('Flow 2')
+            self.ax2.set_ylabel('ln/min')
+            self.ax2.grid(True, linestyle='--', alpha=0.7)
+            if self.flow2_data['pv']:
+                self.ax2.plot(self.times, self.flow2_data['pv'], 'g-', label='Measured')
+                self.ax2.legend(loc='best')
+            else:
+                self.ax2.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
+                              verticalalignment='center', transform=self.ax2.transAxes)
+
+            # --- Plot Concentration ---
             # Calculate actual concentration
             C1 = self.variables['C1_ppm'].get()
             C2 = self.variables['C2_ppm'].get()
@@ -427,21 +467,12 @@ class MainWindow(tk.Frame):
                 actual_conc = 0
 
             target_conc = self.variables['C_tot_ppm'].get()
-
-            # Update data for plotting
-            now = datetime.now()
-            self.times.append(now)
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
-
-            # Limit data points to avoid memory issues
-            max_points = 300
-            if len(self.times) > max_points:
-                self.times = self.times[-max_points:]
+            if len(self.conc_data['target']) > max_points:
                 self.conc_data['target'] = self.conc_data['target'][-max_points:]
                 self.conc_data['actual'] = self.conc_data['actual'][-max_points:]
 
-            # Update the concentration plot
             self.ax3.clear()
             self.ax3.plot(self.times, self.conc_data['actual'], 'b-', label='Actual')
             self.ax3.plot(self.times, self.conc_data['target'], 'r--', label='Target')
@@ -450,6 +481,7 @@ class MainWindow(tk.Frame):
             self.ax3.legend(loc='best')
             self.ax3.grid(True, linestyle='--', alpha=0.7)
             self.ax3.set_xlabel('Time')
+
             self.canvas.draw()
         except Exception as e:
             print(f"Error updating plots: {e}")
@@ -502,11 +534,8 @@ class MainWindow(tk.Frame):
                 # Update instrument addresses with found devices
                 self.instrument_addresses['gas1'] = found_instruments[0]
                 self.instrument_addresses['gas2'] = found_instruments[1]
-                
-                # Update labels in the UI to reflect the new addresses
-                self.update_flow_panel_labels()
-                
-                # Après avoir trouvé les adresses :
+
+                # SET max_flows and units BEFORE updating the panel!
                 for addr in found_instruments:
                     if addr in KNOWN_FLOW_RANGES:
                         self.controller.max_flows[addr] = KNOWN_FLOW_RANGES[addr][1]
@@ -515,6 +544,9 @@ class MainWindow(tk.Frame):
                         minf, maxf, unit = self.ask_flow_range(addr)
                         self.controller.max_flows[addr] = maxf
                         self.controller.units[addr] = unit
+
+                # Now update labels in the UI to reflect the new addresses and correct min/max/unit
+                self.update_flow_panel_labels()
                 
                 self.update_status(f"Found instruments at addresses {found_instruments}", "green")
                 return True
@@ -601,7 +633,10 @@ class MainWindow(tk.Frame):
         try:
             for addr, entry in self.flow_entries.items():
                 try:
-                    flow_val = float(entry.get().replace(',', '.'))
+                    flow_str = entry.get().replace(',', '.')
+                    if flow_str.strip() == "":
+                        continue  # Skip empty entries
+                    flow_val = float(flow_str)
                     max_flow = self.controller.max_flows.get(addr, 1.5)  # Default to 1.5 if not set
 
                     # Validate the flow value against the max flow for the instrument
