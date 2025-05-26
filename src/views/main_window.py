@@ -12,6 +12,13 @@ from ..models.data_logger import DataLogger
 from ..models.calculations import calculate_real_outflow
 import subprocess
 import platform
+from tkinter import simpledialog, messagebox
+
+KNOWN_FLOW_RANGES = {
+    8: (0.13604, 10, "mln/min"),
+    3: (0.012023, 1.5, "ln/min"),
+    5: (1.233, 150, "mln/min"),
+}
 
 class MainWindow(tk.Frame):
     def __init__(self, parent: tk.Tk, controller: Any, settings: Dict[str, Any]):
@@ -236,15 +243,11 @@ class MainWindow(tk.Frame):
                     self.update_status(f"Invalid input for {key}", "red")
                     return
 
-            # Get max_flow from user input or default to 1.5
-            max_flow = float(self.variables.get('max_flow', tk.DoubleVar(value=1.5)).get())
-
             # Calculate flows
             flows = self.controller.calculate_flows(
                 values['C_tot_ppm'],
                 values['C1_ppm'],
-                values['C2_ppm'],
-                max_flow=max_flow
+                values['C2_ppm']
             )
             
             # Display calculated flows with units
@@ -258,7 +261,7 @@ class MainWindow(tk.Frame):
             self.update_status(f"Error: {str(e)}", "red")
         except Exception as e:
             self.update_status(f"Calculation error: {str(e)}", "red")
-            
+
     def start_updates(self):
         """Start periodic updates of instrument readings"""
         def update():
@@ -278,40 +281,39 @@ class MainWindow(tk.Frame):
             flow = float(flow_str.replace(',', '.'))
             unit = self.controller.get_readings(addr).get('Unit', 'ln/min')
             max_flow = 1500 if unit == "ml/min" else 1.5  # Adjust limit based on unit
-            
+
             if not 0 <= flow <= max_flow:
                 raise ValueError(f"Flow must be between 0 and {max_flow} {unit}")
-            
+
             if self.controller.set_flow(addr, flow):
                 self.update_status(f"Flow set to {flow:.3f} {unit}")
             else:
                 self.update_status("Failed to set flow", "red")
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
-    
     def update_readings(self):
         """Update all instrument readings"""
         addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
-        
+
         for addr in addresses:
             if addr is None:
                 continue
-            
+
             try:
                 readings = self.controller.get_readings(addr)
                 unit = readings.get('Unit', 'ln/min')  # Default to ln/min if unit is missing
-                
+
                 for param in ['Flow', 'Valve', 'Temperature']:
                     label = self.reading_labels.get(addr, {}).get(param)
                     if label is None:
                         continue
-                    
+
                     value = readings.get(param)
                     if value is not None:
                         label.config(text=f"{value:.3f}")
                     else:
                         label.config(text="Error")
-                
+
                 # Update the unit label dynamically
                 unit_label = self.reading_labels.get(addr, {}).get('Unit')
                 if unit_label:
@@ -379,182 +381,67 @@ class MainWindow(tk.Frame):
 
     def update_plots(self):
         """Update the plots with current data"""
-        # Only proceed if connected to instruments
         if not self.controller.is_connected():
-            # Skip plot updates but don't show error repeatedly
-            return
-        
+            return  # Skip plot updates if not connected
+
         try:
-            # Get the addresses from the class variables
             address_1 = self.instrument_addresses['gas1']
             address_2 = self.instrument_addresses['gas2']
-            
-            # If we don't have valid addresses yet, skip plotting
+
             if address_1 is None or address_2 is None:
-                return
-            
-            # Get current readings and setpoints with error handling
-            try:
-                readings_1 = self.controller.get_readings(address_1)
-                flow1 = readings_1.get('Flow')
-                sp1 = self.controller.get_setpoint(address_1)
-                
-                # Check if we have valid readings
-                if flow1 is None:
-                    flow1, sp1 = 0, 0
-            except Exception as e:
-                print(f"Error getting readings for instrument 1: {e}")
-                flow1, sp1 = 0, 0
-                
-            try:
-                readings_2 = self.controller.get_readings(address_2)
-                flow2 = readings_2.get('Flow')
-                sp2 = self.controller.get_setpoint(address_2)
-                
-                # Check if we have valid readings
-                if flow2 is None:
-                    flow2, sp2 = 0, 0
-            except Exception as e:
-                print(f"Error getting readings for instrument 2: {e}")
-                flow2, sp2 = 0, 0
-            
+                return  # Skip if addresses are not valid
+
+            # Get readings for both instruments
+            readings_1 = self.controller.get_readings(address_1)
+            readings_2 = self.controller.get_readings(address_2)
+
+            flow1 = readings_1.get('Flow', 0)
+            flow2 = readings_2.get('Flow', 0)
+            unit1 = readings_1.get('Unit', 'ln/min')
+            unit2 = readings_2.get('Unit', 'ln/min')
+
+            # Convert flows to ln/min for concentration calculation
+            if unit1 == "ml/min":
+                flow1 /= 1000  # Convert ml/min to ln/min
+            if unit2 == "ml/min":
+                flow2 /= 1000  # Convert ml/min to ln/min
+
             # Calculate actual concentration
             C1 = self.variables['C1_ppm'].get()
             C2 = self.variables['C2_ppm'].get()
-            
-            # Calculate concentration only if both flows are valid
-            if flow1 is not None and flow2 is not None and (flow1 > 0 or flow2 > 0):
+            if flow1 > 0 or flow2 > 0:
                 actual_conc = calculate_real_outflow(C1, flow1, C2, flow2)
             else:
                 actual_conc = 0
-                
+
             target_conc = self.variables['C_tot_ppm'].get()
-            
-            # Update data lists
+
+            # Update data for plotting
             now = datetime.now()
             self.times.append(now)
-            self.flow1_data['pv'].append(flow1 if flow1 is not None else 0)
-            self.flow2_data['pv'].append(flow2 if flow2 is not None else 0)
-            self.flow1_data['sp'].append(sp1 if sp1 is not None else 0)
-            self.flow2_data['sp'].append(sp2 if sp2 is not None else 0)
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
-            
+
             # Limit data points to avoid memory issues
-            max_points = 300  # 5 minutes at 1 second update rate
+            max_points = 300
             if len(self.times) > max_points:
                 self.times = self.times[-max_points:]
-                self.flow1_data['pv'] = self.flow1_data['pv'][-max_points:]
-                self.flow1_data['sp'] = self.flow1_data['sp'][-max_points:]
-                self.flow2_data['pv'] = self.flow2_data['pv'][-max_points:]
-                self.flow2_data['sp'] = self.flow2_data['sp'][-max_points:]
                 self.conc_data['target'] = self.conc_data['target'][-max_points:]
                 self.conc_data['actual'] = self.conc_data['actual'][-max_points:]
-            
-            # Calculate window for last 60 seconds of data
-            window_cutoff = now - timedelta(seconds=60)
-            
-            # Find index for 60-second window
-            window_indices = []
-            window_times = []
-            for i, t in enumerate(self.times):
-                if t >= window_cutoff:
-                    window_indices.append(i)
-                    window_times.append(t)
-            
-            # If we don't have any data in our window yet, use all available data
-            if not window_indices:
-                window_indices = list(range(len(self.times)))
-                window_times = self.times.copy()
-            
-            # Extract data for the window
-            window_flow1_pv = [self.flow1_data['pv'][i] for i in window_indices]
-            window_flow1_sp = [self.flow1_data['sp'][i] for i in window_indices]
-            window_flow2_pv = [self.flow2_data['pv'][i] for i in window_indices]
-            window_flow2_sp = [self.flow2_data['sp'][i] for i in window_indices]
-            window_conc_target = [self.conc_data['target'][i] for i in window_indices]
-            window_conc_actual = [self.conc_data['actual'][i] for i in window_indices]
-            
-            # Format time for x-axis
-            times_formatted = [t.strftime('%H:%M:%S') for t in window_times]
-            
-            # Use indices for plotting (0 to len(window_data))
-            plot_indices = list(range(len(window_indices)))
-            
-            # Clear and redraw plots
-            self.ax1.clear()
-            self.ax2.clear()
+
+            # Update the concentration plot
             self.ax3.clear()
-            
-            # Plot flow 1
-            self.ax1.plot(plot_indices, window_flow1_pv, 'b-', label='Actual')
-            self.ax1.plot(plot_indices, window_flow1_sp, 'r--', label='Setpoint')
-            self.ax1.set_title(f'Flow 1 (Addr: {address_1})')
-            self.ax1.set_ylabel('ln/min')
-            self.ax1.legend(loc='best')
-            self.ax1.grid(True, linestyle='--', alpha=0.7)
-
-            # Only show a few x-axis labels to avoid crowding
-            if len(times_formatted) > 6:
-                step = max(1, len(times_formatted) // 6)
-                visible_indices = list(range(0, len(times_formatted), step))
-                visible_labels = [times_formatted[i] for i in visible_indices]
-                self.ax1.set_xticks([plot_indices[i] for i in visible_indices])
-                self.ax1.set_xticklabels(visible_labels, rotation=45)
-            else:
-                self.ax1.set_xticks(plot_indices)
-                self.ax1.set_xticklabels(times_formatted, rotation=45)
-
-            # Set x-axis label
-            self.ax1.set_xlabel('Last 60 seconds')
-
-            # Plot flow 2
-            self.ax2.plot(plot_indices, window_flow2_pv, 'g-', label='Actual')
-            self.ax2.plot(plot_indices, window_flow2_sp, 'r--', label='Setpoint')
-            self.ax2.set_title(f'Flow 2 (Addr: {address_2})')
-            self.ax2.set_ylabel('ln/min')
-            self.ax2.legend(loc='best')
-            self.ax2.grid(True, linestyle='--', alpha=0.7)
-            
-            # Only show a few x-axis labels to avoid crowding
-            if len(times_formatted) > 6:
-                self.ax2.set_xticks([plot_indices[i] for i in visible_indices])
-                self.ax2.set_xticklabels(visible_labels, rotation=45)
-            else:
-                self.ax2.set_xticks(plot_indices)
-                self.ax2.set_xticklabels(times_formatted, rotation=45)
-                
-            # Set x-axis label
-            self.ax2.set_xlabel('Last 60 seconds')
-
-            # Plot concentration
-            self.ax3.plot(plot_indices, window_conc_actual, 'b-', label='Actual')
-            self.ax3.plot(plot_indices, window_conc_target, 'r--', label='Target')
+            self.ax3.plot(self.times, self.conc_data['actual'], 'b-', label='Actual')
+            self.ax3.plot(self.times, self.conc_data['target'], 'r--', label='Target')
             self.ax3.set_title('Concentration')
             self.ax3.set_ylabel('ppm')
             self.ax3.legend(loc='best')
             self.ax3.grid(True, linestyle='--', alpha=0.7)
-            
-            # Only show a few x-axis labels to avoid crowding
-            if len(times_formatted) > 6:
-                self.ax3.set_xticks([plot_indices[i] for i in visible_indices])
-                self.ax3.set_xticklabels(visible_labels, rotation=45)
-            else:
-                self.ax3.set_xticks(plot_indices)
-                self.ax3.set_xticklabels(times_formatted, rotation=45)
-                
-            # Set x-axis label
-            self.ax3.set_xlabel('Last 60 seconds')
-                
-            # Adjust layout and draw
-            self.fig.tight_layout()
+            self.ax3.set_xlabel('Time')
             self.canvas.draw()
-            
         except Exception as e:
             print(f"Error updating plots: {e}")
-            import traceback
-            traceback.print_exc()
-            # Continue execution to avoid breaking the update loop
+        
 
     def setup_touch_keyboard(self):
         import subprocess
@@ -567,6 +454,28 @@ class MainWindow(tk.Frame):
                 bind_keyboard(child)
 
         bind_keyboard(self)
+
+    def ask_flow_range(self, addr):
+        """Demande à l'utilisateur de sélectionner la plage de flow si l'adresse est inconnue."""
+        options = [
+            ("0.136...10 mln/min", (0.13604, 10, "mln/min")),
+            ("0.012...1.5 ln/min", (0.012023, 1.5, "ln/min")),
+            ("1.23...150 mln/min", (1.233, 150, "mln/min")),
+        ]
+        choice = simpledialog.askstring(
+            "Sélection du modèle",
+            f"Adresse {addr} inconnue. Sélectionnez le modèle (plage de flow) :\n"
+            + "\n".join(f"{i+1}. {opt[0]}" for i, opt in enumerate(options))
+        )
+        if not choice:
+            messagebox.showwarning("Avertissement", "Aucune plage sélectionnée, valeur par défaut 1.5 ln/min utilisée.")
+            return (0, 1.5, "ln/min")
+        try:
+            idx = int(choice.strip()) - 1
+            return options[idx][1]
+        except Exception:
+            messagebox.showwarning("Avertissement", "Sélection invalide, valeur par défaut 1.5 ln/min utilisée.")
+            return (0, 1.5, "ln/min")
 
     def scan_instruments(self):
         """Scan for available instruments and update addresses"""
@@ -595,6 +504,16 @@ class MainWindow(tk.Frame):
                 
                 # Update labels in the UI to reflect the new addresses
                 self.update_flow_panel_labels()
+                
+                # Après avoir trouvé les adresses :
+                for addr in found_instruments:
+                    if addr in KNOWN_FLOW_RANGES:
+                        self.controller.max_flows[addr] = KNOWN_FLOW_RANGES[addr][1]
+                        self.controller.units[addr] = KNOWN_FLOW_RANGES[addr][2]
+                    else:
+                        minf, maxf, unit = self.ask_flow_range(addr)
+                        self.controller.max_flows[addr] = maxf
+                        self.controller.units[addr] = unit
                 
                 self.update_status(f"Found instruments at addresses {found_instruments}", "green")
                 return True
