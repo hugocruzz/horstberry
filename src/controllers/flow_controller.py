@@ -11,7 +11,9 @@ class FlowController:
         self.connected = False
         self.max_flows = {}
         self.setpoints = {}  # Track setpoints - will be populated when addresses are known
-        
+        self.units = {}       # Dictionnaire pour stocker l'unité de chaque instrument
+        self.max_flows = {}   # Dictionnaire pour stocker le débit max de chaque instrument
+        # ...existing code...
         # Only initialize with provided addresses
         if addresses and isinstance(addresses, list) and addresses[0] is not None:
             self.initialize_instruments(port, addresses)
