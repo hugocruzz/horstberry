@@ -89,8 +89,10 @@ class MainWindow(tk.Frame):
         self.pack(fill=tk.BOTH, expand=True)
 
         self.is_raspberry = platform.system() == 'Linux'
-        if self.is_raspberry:
-            self.setup_touch_keyboard()
+
+        # Add a command output window (Text widget) at the top right
+        self.command_output = tk.Text(self.parent, height=10, width=60, state='disabled', bg='#f4f4f4', font=('Consolas', 11))
+        self.command_output.place(relx=1.0, rely=0.0, anchor='ne', x=-10, y=10)  # Top right with some padding
 
     def update_status(self, message: str, color: str = "black"):
         """Update status message"""
@@ -228,8 +230,9 @@ class MainWindow(tk.Frame):
     def calculate_flows(self):
         if not self.controller.is_connected():
             self.update_status("Please connect the instruments", "red")
+            self.print_to_command_output("Please connect the instruments")
             return
-            
+
         try:
             # Get values with validation
             values = {}
@@ -240,7 +243,9 @@ class MainWindow(tk.Frame):
                         raise ValueError(f"{key} cannot be empty")
                     values[key] = float(value)
                 except (ValueError, tk.TclError) as e:
-                    self.update_status(f"Invalid input for {key}", "red")
+                    msg = f"Invalid input for {key}"
+                    self.update_status(msg, "red")
+                    self.print_to_command_output(msg)
                     return
 
             # Calculate flows
@@ -249,18 +254,22 @@ class MainWindow(tk.Frame):
                 values['C1_ppm'],
                 values['C2_ppm']
             )
-            
+
             # Display calculated flows with units
             flow_messages = []
             for addr, flow in flows.items():
                 unit = self.controller.read_unit(addr)
                 flow_messages.append(f"Q{addr}={flow:.3f} {unit}")
-            
-            self.update_status("Calculated: " + ", ".join(flow_messages))
+
+            result_msg = "Calculated: " + ", ".join(flow_messages)
+            self.update_status(result_msg)
+            self.print_to_command_output(result_msg)
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
+            self.print_to_command_output(f"Error: {str(e)}")
         except Exception as e:
             self.update_status(f"Calculation error: {str(e)}", "red")
+            self.print_to_command_output(f"Calculation error: {str(e)}")
 
     def start_updates(self):
         """Start periodic updates of instrument readings"""
@@ -400,11 +409,10 @@ class MainWindow(tk.Frame):
             unit1 = readings_1.get('Unit', 'ln/min')
             unit2 = readings_2.get('Unit', 'ln/min')
 
-            # Convert flows to ln/min for concentration calculation
-            if unit1 == "ml/min":
-                flow1 /= 1000  # Convert ml/min to ln/min
-            if unit2 == "ml/min":
-                flow2 /= 1000  # Convert ml/min to ln/min
+            if unit1 in ("ml/min", "mln/min"):
+                flow1 /= 1000  # Convert ml/min or mln/min to ln/min
+            if unit2 in ("ml/min", "mln/min"):
+                flow2 /= 1000  # Convert ml/min or mln/min to ln/min
 
             # Calculate actual concentration
             C1 = self.variables['C1_ppm'].get()
@@ -443,17 +451,6 @@ class MainWindow(tk.Frame):
             print(f"Error updating plots: {e}")
         
 
-    def setup_touch_keyboard(self):
-        import subprocess
-
-        def bind_keyboard(widget):
-            if isinstance(widget, tk.Entry):
-                widget.bind("<FocusIn>", lambda event: subprocess.Popen(['onboard']))
-                widget.bind("<FocusOut>", lambda event: subprocess.Popen(['pkill', 'onboard']))
-            for child in widget.winfo_children():
-                bind_keyboard(child)
-
-        bind_keyboard(self)
 
     def ask_flow_range(self, addr):
         """Demande à l'utilisateur de sélectionner la plage de flow si l'adresse est inconnue."""
@@ -550,26 +547,43 @@ class MainWindow(tk.Frame):
                 self.update_status(f"Error scanning for instruments: {str(e)}", "red")
                 return False
         
+    def print_to_command_output(self, message: str):
+        """Display a message in the command output window."""
+        self.command_output.config(state='normal')
+        self.command_output.insert(tk.END, message + '\n')
+        self.command_output.see(tk.END)
+        self.command_output.config(state='disabled')
+
     def update_flow_panel_labels(self):
         """Update the labels in the flow panel to reflect current addresses"""
         # Clear existing controls
         for widget in self.flow_frame.winfo_children():
             if isinstance(widget, ttk.LabelFrame) and widget.winfo_children():
                 widget.destroy()
-        
+
         # Clear the flow_entries dictionary to remove references to old widgets
         self.flow_entries.clear()
-        
+
         # Add instrument controls with updated addresses
         addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
         names = ['Gas 1', 'Gas 2']
-        
+
         for i, (addr, name) in enumerate(zip(addresses, names)):
+            if addr is None:
+                continue
+            # Get min/max/unit for this instrument
+            minf = 0
+            maxf = self.controller.max_flows.get(addr, 1.5)
+            unit = self.controller.units.get(addr, "ln/min")
             group = ttk.LabelFrame(self.flow_frame, text=f"{name} Control (Addr: {addr})")
             group.grid(row=1, column=i, padx=5, pady=5)
-            
+
+            # Add min/max display at the top of each instrument panel
+            minmax_label = ttk.Label(group, text=f"Min: {minf:.3f} {unit}   Max: {maxf:.3f} {unit}", foreground="blue")
+            minmax_label.pack(anchor='w', padx=5, pady=(5, 0))
+
             self.setup_instrument_controls(group, addr)
-        
+
         # Make sure the scan button remains at the top
         scan_button = ttk.Button(
             self.flow_frame, 
@@ -585,22 +599,22 @@ class MainWindow(tk.Frame):
                 try:
                     flow_val = float(entry.get().replace(',', '.'))
                     max_flow = self.controller.max_flows.get(addr, 1.5)  # Default to 1.5 if not set
-                    
+
                     # Validate the flow value against the max flow for the instrument
                     if not 0 <= flow_val <= max_flow:
                         raise ValueError(f"Flow must be between 0 and {max_flow} for address {addr}")
-                    
+
                     # Set the flow for the instrument
                     if self.controller.set_flow(addr, flow_val):
-                        print(f"Flow set for address {addr}: {flow_val} (Max Flow: {max_flow})")
+                        self.print_to_command_output(f"Flow set for address {addr}: {flow_val} (Max Flow: {max_flow})")
                     else:
-                        print(f"Failed to set flow for address {addr}")
+                        self.print_to_command_output(f"Failed to set flow for address {addr}")
                 except ValueError as e:
-                    print(f"Invalid flow value for address {addr}: {e}")
+                    self.print_to_command_output(f"Invalid flow value for address {addr}: {e}")
                 except Exception as e:
-                    print(f"Error setting flow for address {addr}: {e}")
+                    self.print_to_command_output(f"Error setting flow for address {addr}: {e}")
         except Exception as e:
-            print(f"Error in start_all_flows: {e}")
+            self.print_to_command_output(f"Error in start_all_flows: {e}")
 
             
     def stop_all_flows(self):
