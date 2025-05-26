@@ -107,29 +107,11 @@ class MainWindow(tk.Frame):
         self.status_labels['Status'].config(text=message, foreground=color)
 
     def setup_gui(self):
-        # Create a canvas and a vertical scrollbar for scrolling
-        self.canvas_container = tk.Canvas(self, borderwidth=0)
-        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas_container.yview)
-        self.scrollable_frame = ttk.Frame(self.canvas_container)
-
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas_container.configure(
-                scrollregion=self.canvas_container.bbox("all")
-            )
-        )
-
-        self.canvas_container.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas_container.configure(yscrollcommand=self.scrollbar.set)
-
-        self.canvas_container.grid(row=0, column=0, sticky="nsew")
-        self.scrollbar.grid(row=0, column=1, sticky="ns")
-
-        # Now use self.scrollable_frame as the parent for your main_container
-        self.main_container = ttk.Frame(self.scrollable_frame, padding="10")
+        # Use a regular frame as the main container
+        self.main_container = ttk.Frame(self, padding="10")
         self.main_container.grid(row=0, column=0, sticky="nsew")
 
-        # Continue as before, but use self.main_container as the parent for your panels
+        # Configure grid weights
         self.main_container.grid_columnconfigure(1, weight=1)
         self.main_container.grid_rowconfigure(1, weight=1)
 
