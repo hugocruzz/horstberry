@@ -90,9 +90,13 @@ class MainWindow(tk.Frame):
 
         self.is_raspberry = platform.system() == 'Linux'
 
-        # Add a command output window (Text widget) at the top right
-        self.command_output = tk.Text(self.parent, height=10, width=60, state='disabled', bg='#f4f4f4', font=('Consolas', 11))
-        self.command_output.place(relx=1.0, rely=0.0, anchor='ne', x=-10, y=10)  # Top right with some padding
+        # Add a command output window (Text widget) at the bottom, spanning both columns
+        self.command_output = tk.Text(
+            main_container, height=8, width=80, state='disabled',
+            bg='#f4f4f4', font=('Consolas', 11)
+        )
+        self.command_output.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
+        main_container.grid_rowconfigure(1, weight=0)
 
     def update_status(self, message: str, color: str = "black"):
         """Update status message"""
