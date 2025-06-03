@@ -743,43 +743,92 @@ class MainWindow(tk.Frame):
         graph_win.geometry("1200x500")
         self.graph_window_open = True
         
-        # Create plot canvas for the new window
-        fig, ax1, ax2, ax3, canvas = self.create_plot_canvas(graph_win)
+        # Store window-specific plot objects
+        self.popup_fig, self.popup_ax1, self.popup_ax2, self.popup_ax3, self.popup_canvas = self.create_plot_canvas(graph_win)
         
-        # Copy current data to the new axes
+        # Initial data population
         if self.times:
-            ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
-            ax1.set_title('Flow 1')
-            ax1.set_ylabel('ln/min')
-            ax1.legend(loc='best')
-
-            ax2.plot(self.times, self.flow2_data['pv'], 'g-', label='Measured')
-            ax2.set_title('Flow 2')
-            ax2.set_ylabel('ln/min')
-            ax2.legend(loc='best')
-
-            ax3.plot(self.times, self.conc_data['actual'], 'b-', label='Actual')
-            ax3.plot(self.times, self.conc_data['target'], 'r--', label='Target')
-            ax3.set_title('Concentration')
-            ax3.set_ylabel('ppm')
-            ax3.legend(loc='best')
-            ax3.set_xlabel('Time')
+            self.update_popup_graphs()
         else:
-            for ax in [ax1, ax2, ax3]:
-                ax.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
-                        verticalalignment='center', transform=ax.transAxes)
-        
-        # Update plots in real-time when window is open
-        def update_window_plots():
-            self.update_plots()
-            if graph_win.winfo_exists():
-                graph_win.after(1000, update_window_plots)
-            else:
-                self.graph_window_open = False
-        
-        update_window_plots()
+            for ax in [self.popup_ax1, self.popup_ax2, self.popup_ax3]:
+                ax.text(0.5, 0.5, 'Waiting for data...', 
+                       horizontalalignment='center',
+                       verticalalignment='center', 
+                       transform=ax.transAxes)
+            self.popup_canvas.draw()
         
         # When window is closed, reset the graph_window_open flag
-        graph_win.protocol("WM_DELETE_WINDOW", lambda: [graph_win.destroy(), setattr(self, 'graph_window_open', False)])
+        graph_win.protocol("WM_DELETE_WINDOW", 
+                          lambda: [graph_win.destroy(), 
+                                   setattr(self, 'graph_window_open', False),
+                                   self.cleanup_popup_graphs()])
+
+    def cleanup_popup_graphs(self):
+        """Clean up references to popup graph objects"""
+        if hasattr(self, 'popup_fig'):
+            del self.popup_fig
+        if hasattr(self, 'popup_ax1'):
+            del self.popup_ax1
+        if hasattr(self, 'popup_ax2'):
+            del self.popup_ax2
+        if hasattr(self, 'popup_ax3'):
+            del self.popup_ax3
+        if hasattr(self, 'popup_canvas'):
+            del self.popup_canvas
+
+    def update_popup_graphs(self):
+        """Update only the popup window graphs"""
+        if not hasattr(self, 'popup_ax1') or not self.graph_window_open:
+            return
+            
+        # Clear previous plots
+        self.popup_ax1.clear()
+        self.popup_ax2.clear()
+        self.popup_ax3.clear()
         
-        canvas.draw()
+        # Plot Flow 1
+        self.popup_ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
+        self.popup_ax1.set_title('Flow 1')
+        self.popup_ax1.set_ylabel('ln/min')
+        self.popup_ax1.legend(loc='best')
+        self.popup_ax1.grid(True, linestyle='--', alpha=0.7)
+
+        # Plot Flow 2
+        self.popup_ax2.plot(self.times, self.flow2_data['pv'], 'g-', label='Measured')
+        self.popup_ax2.set_title('Flow 2')
+        self.popup_ax2.set_ylabel('ln/min')
+        self.popup_ax2.legend(loc='best')
+        self.popup_ax2.grid(True, linestyle='--', alpha=0.7)
+
+        # Plot Concentration
+        self.popup_ax3.plot(self.times, self.conc_data['actual'], 'b-', label='Actual')
+        self.popup_ax3.plot(self.times, self.conc_data['target'], 'r--', label='Target')
+        self.popup_ax3.set_title('Concentration')
+        self.popup_ax3.set_ylabel('ppm')
+        self.popup_ax3.set_xlabel('Time')
+        self.popup_ax3.legend(loc='best')
+        self.popup_ax3.grid(True, linestyle='--', alpha=0.7)
+        
+        # Draw the updated figure
+        self.popup_canvas.draw()
+
+    def start_updates(self):
+        """Start periodic updates of instrument readings and plots"""
+        def update():
+            try:
+                self.update_readings()
+                
+                # Update main window plots if on Windows
+                if not self.is_raspberry:
+                    self.update_plots()
+                    
+                # Update popup graphs if window is open
+                if hasattr(self, 'graph_window_open') and self.graph_window_open:
+                    self.update_popup_graphs()
+                    
+            except Exception as e:
+                print(f"Update error: {e}")
+            finally:
+                self.after(1000, update)  # Schedule next update in 1 second
+                
+        update()  # Start the update loop
