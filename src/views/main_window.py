@@ -27,6 +27,9 @@ class MainWindow(tk.Frame):
         self.controller = controller
         self.settings = settings
         
+        # Add this line early in __init__ before calling setup_gui
+        self.is_raspberry = platform.system() == 'Linux'
+        
         # Configure window size and position
         window_width = self.settings.get('width', 1024)
         window_height = self.settings.get('height', 600)
@@ -77,9 +80,12 @@ class MainWindow(tk.Frame):
         # Initialize a dict to hold the flow entry widgets for each instrument
         self.flow_entries = {}
         
-        # Setup UI components
+        # Setup UI components - make sure this is called after is_raspberry is set
         self.setup_gui()
-        self.setup_plots()
+        
+        # Only setup plots on non-Raspberry Pi systems (will show on demand on Raspberry Pi)
+        if not self.is_raspberry:
+            self.setup_plots()
         
         # Add a welcome message prompting to scan for instruments
         self.update_status("Welcome! Please scan for instruments to get started", "blue")
@@ -87,8 +93,6 @@ class MainWindow(tk.Frame):
         # Now start updates after setting up
         self.start_updates()
         self.pack(fill=tk.BOTH, expand=True)
-
-        self.is_raspberry = platform.system() == 'Linux'
 
         # Add a command output window (Text widget) at the bottom, spanning both columns
         # ...existing code...
