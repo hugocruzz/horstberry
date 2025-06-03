@@ -359,7 +359,8 @@ class MainWindow(tk.Frame):
     def collect_plot_data(self):
         """Collect data for plotting without actually updating any plots"""
         if not self.controller.is_connected():
-            print("Skipping data collection: Controller not connected")
+            # Remove debug message
+            # print("Skipping data collection: Controller not connected")
             return
             
         try:
@@ -367,19 +368,21 @@ class MainWindow(tk.Frame):
             address_2 = self.instrument_addresses['gas2']
 
             if address_1 is None or address_2 is None:
-                print(f"Skipping data collection: Missing addresses (gas1={address_1}, gas2={address_2})")
+                # Remove debug message
+                # print(f"Skipping data collection: Missing addresses (gas1={address_1}, gas2={address_2})")
                 return
 
             # Get readings for both instruments
             readings_1 = self.controller.get_readings(address_1)
             readings_2 = self.controller.get_readings(address_2)
             
-            # Debug readings
-            print(f"Readings from addr {address_1}: {readings_1}")
-            print(f"Readings from addr {address_2}: {readings_2}")
+            # Remove debug readings
+            # print(f"Readings from addr {address_1}: {readings_1}")
+            # print(f"Readings from addr {address_2}: {readings_2}")
 
             # Ensure 'Flow' exists in readings
             if 'Flow' not in readings_1 or 'Flow' not in readings_2:
+                # Keep this message as it's important
                 print("Missing Flow readings in controller response")
                 return
                 
@@ -388,8 +391,8 @@ class MainWindow(tk.Frame):
             unit1 = readings_1.get('Unit', 'ln/min')
             unit2 = readings_2.get('Unit', 'ln/min')
 
-            # Debug flow values
-            print(f"Flow values: flow1={flow1} {unit1}, flow2={flow2} {unit2}")
+            # Remove debug flow values
+            # print(f"Flow values: flow1={flow1} {unit1}, flow2={flow2} {unit2}")
 
             # Convert to ln/min if needed
             if unit1 in ("ml/min", "mln/min"):
@@ -415,11 +418,9 @@ class MainWindow(tk.Frame):
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
 
-            # Print debug info
-            print(f"Added data point: time={now}, flow1={flow1}, flow2={flow2}, conc={actual_conc}")
-
-            # Verify data arrays have content
-            print(f"Data arrays: times={len(self.times)}, flow1={len(self.flow1_data['pv'])}, flow2={len(self.flow2_data['pv'])}")
+            # Remove print debug info
+            # print(f"Added data point: time={now}, flow1={flow1}, flow2={flow2}, conc={actual_conc}")
+            # print(f"Data arrays: times={len(self.times)}, flow1={len(self.flow1_data['pv'])}, flow2={len(self.flow2_data['pv'])}")
 
             # Limit data points
             max_points = 300
@@ -768,8 +769,8 @@ class MainWindow(tk.Frame):
                     # Get readings from controller
                     readings = self.controller.get_readings(addr)
                     
-                    # Debug readings to command output
-                    self.print_to_command_output(f"Debug - Readings for addr {addr}: {readings}")
+                    # Remove debug output to clean up the command window
+                    # self.print_to_command_output(f"Debug - Readings for addr {addr}: {readings}")
                     
                     # Update each parameter label
                     for param in ['Flow', 'Valve', 'Temperature']:
