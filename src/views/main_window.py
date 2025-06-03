@@ -113,7 +113,7 @@ class MainWindow(tk.Frame):
 
         # Configure grid weights
         self.main_container.grid_columnconfigure(1, weight=1)
-        self.main_container.grid_rowconfigure(1, weight=1)
+        self.main_container.grid_rowconfigure(0, weight=1)
 
         # Create frames with better styling
         self.concentration_frame = ttk.LabelFrame(
@@ -134,16 +134,18 @@ class MainWindow(tk.Frame):
         self.setup_concentration_panel()
         self.setup_flow_panel()
 
-        # Add the plot area below the controls
-        self.setup_plots()
-
-        # Add "Show Graph" button if you still want it (optional)
-        # show_graph_btn = ttk.Button(
-        #     self.main_container,
-        #     text="Show Graph",
-        #     command=self.open_graph_window
-        # )
-        # show_graph_btn.grid(row=2, column=0, columnspan=2, pady=(10, 0), sticky="ew")
+        # For Raspberry Pi, don't add the plot area to the main window
+        # Instead, add a button to show the graphs in a separate window
+        if self.is_raspberry:
+            show_graph_btn = ttk.Button(
+                self.main_container,
+                text="Show Graphs",
+                command=self.open_graph_window
+            )
+            show_graph_btn.grid(row=2, column=0, columnspan=2, pady=(10, 0), sticky="ew")
+        else:
+            # For Windows, include the plots in the main window as before
+            self.setup_plots()
         
     def setup_concentration_panel(self):
         # Concentration inputs
@@ -264,21 +266,60 @@ class MainWindow(tk.Frame):
                     self.print_to_command_output(msg)
                     return
 
-            # Calculate flows
-            flows = self.controller.calculate_flows(
+            # Get max flow value from the GUI
+            try:
+                max_flow = float(self.variables['max_flow'].get())
+            except Exception:
+                max_flow = 1.5  # fallback
+
+            # Calculate flows, now passing max_flow
+            # Try to get values from controller first
+            Q1, Q2 = self.controller.calculate_flows(
                 values['C_tot_ppm'],
                 values['C1_ppm'],
-                values['C2_ppm']
+                values['C2_ppm'],
+                max_flow
             )
-
+            
+            # Debug the returned values to understand what we're getting
+            self.print_to_command_output(f"Debug - Returned flow values: Q1={Q1}, Q2={Q2}")
+            
+            # Check if we got actual flow values or addresses
+            if not isinstance(Q1, (float, int)) or not isinstance(Q2, (float, int)):
+                # If controller returned non-numeric values, calculate flows locally
+                self.print_to_command_output("Controller didn't return numeric flows. Calculating locally...")
+                from ..models.calculations import calculate_flows_variable
+                Q1, Q2 = calculate_flows_variable(
+                    values['C_tot_ppm'],
+                    values['C1_ppm'], 
+                    values['C2_ppm'],
+                    max_flow
+                )
+                self.print_to_command_output(f"Locally calculated flows: Q1={Q1:.3f}, Q2={Q2:.3f}")
+            
+            # Map to instrument addresses
+            addr1 = self.instrument_addresses['gas1']
+            addr2 = self.instrument_addresses['gas2']
+            
+            flows = {addr1: Q1, addr2: Q2}
+            
             # Display calculated flows with units
             flow_messages = []
             for addr, flow in flows.items():
+                # Get the unit from controller
                 unit = self.controller.read_unit(addr)
-                flow_messages.append(f"Q{addr}={flow:.3f} {unit}")
+                
+                # Convert flow value based on unit if needed
+                converted_flow = flow
+                if isinstance(flow, (float, int)):
+                    # If unit is ml/min, convert from ln/min
+                    if unit == "ml/min":
+                        converted_flow = flow * 1000  # Convert ln/min to ml/min
+                    flow_messages.append(f"Q{addr}={converted_flow:.3f} {unit}")
+                else:
+                    flow_messages.append(f"Q{addr}={str(flow)} {unit}")
 
             result_msg = "Calculated: " + ", ".join(flow_messages)
-            self.update_status(result_msg)
             self.print_to_command_output(result_msg)
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
@@ -292,13 +333,14 @@ class MainWindow(tk.Frame):
         def update():
             try:
                 self.update_readings()
-                self.update_plots()
+                # Only update plots if they are shown (not on Raspberry Pi main window)
+                if not self.is_raspberry or hasattr(self, 'graph_window_open'):
+                    self.update_plots()
             except Exception as e:
                 print(f"Update error: {e}")
             finally:
                 self.after(1000, update)  # Schedule next update in 1 second
         update()
-
                     
     def set_flow(self, addr: int, flow_str: str):
         """Set flow for specific instrument"""
@@ -695,8 +737,11 @@ class MainWindow(tk.Frame):
         graph_win = tk.Toplevel(self)
         graph_win.title("Flow Monitoring Graphs")
         graph_win.geometry("1200x500")
+        self.graph_window_open = True
+        
+        # Create plot canvas for the new window
         fig, ax1, ax2, ax3, canvas = self.create_plot_canvas(graph_win)
-
+        
         # Copy current data to the new axes
         if self.times:
             ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
@@ -719,4 +764,18 @@ class MainWindow(tk.Frame):
             for ax in [ax1, ax2, ax3]:
                 ax.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
                         verticalalignment='center', transform=ax.transAxes)
+        
+        # Update plots in real-time when window is open
+        def update_window_plots():
+            self.update_plots()
+            if graph_win.winfo_exists():
+                graph_win.after(1000, update_window_plots)
+            else:
+                self.graph_window_open = False
+        
+        update_window_plots()
+        
+        # When window is closed, reset the graph_window_open flag
+        graph_win.protocol("WM_DELETE_WINDOW", lambda: [graph_win.destroy(), setattr(self, 'graph_window_open', False)])
+        
         canvas.draw()
