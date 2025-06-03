@@ -333,127 +333,34 @@ class MainWindow(tk.Frame):
             self.print_to_command_output(f"Calculation error: {str(e)}")
 
     def start_updates(self):
-        """Start periodic updates of instrument readings"""
+        """Start periodic updates of instrument readings and plots"""
         def update():
             try:
+                # Always update readings
                 self.update_readings()
-                # Only update plots if they are shown (not on Raspberry Pi main window)
-                if not self.is_raspberry or hasattr(self, 'graph_window_open'):
+                
+                # Collect data for plots
+                self.collect_plot_data()
+                
+                # Update main window plots if on Windows
+                if not self.is_raspberry:
                     self.update_plots()
+                    
+                # Update popup graphs if window is open
+                if hasattr(self, 'graph_window_open') and self.graph_window_open:
+                    self.update_popup_graphs()
+                    
             except Exception as e:
                 print(f"Update error: {e}")
             finally:
                 self.after(1000, update)  # Schedule next update in 1 second
-        update()
-                    
-    def set_flow(self, addr: int, flow_str: str):
-        """Set flow for specific instrument"""
-        try:
-            flow = float(flow_str.replace(',', '.'))
-            unit = self.controller.get_readings(addr).get('Unit', 'ln/min')
-            max_flow = 1500 if unit == "ml/min" else 1.5  # Adjust limit based on unit
-
-            if not 0 <= flow <= max_flow:
-                raise ValueError(f"Flow must be between 0 and {max_flow} {unit}")
-
-            if self.controller.set_flow(addr, flow):
-                self.update_status(f"Flow set to {flow:.3f} {unit}")
-            else:
-                self.update_status("Failed to set flow", "red")
-        except ValueError as e:
-            self.update_status(f"Error: {str(e)}", "red")
-    def update_readings(self):
-        """Update all instrument readings"""
-        addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
-
-        for addr in addresses:
-            if addr is None:
-                continue
-
-            try:
-                readings = self.controller.get_readings(addr)
-                unit = readings.get('Unit', 'ln/min')  # Default to ln/min if unit is missing
-
-                for param in ['Flow', 'Valve', 'Temperature']:
-                    label = self.reading_labels.get(addr, {}).get(param)
-                    if label is None:
-                        continue
-
-                    value = readings.get(param)
-                    if value is not None:
-                        label.config(text=f"{value:.3f}")
-                    else:
-                        label.config(text="Error")
-
-                # Update the unit label dynamically
-                unit_label = self.reading_labels.get(addr, {}).get('Unit')
-                if unit_label:
-                    unit_label.config(text=unit)
-            except Exception as e:
-                print(f"Error updating readings for {addr}: {e}")
-
-    def setup_plots(self):
-        """Set up the plot area"""
-        plot_frame = ttk.LabelFrame(self, text="Flow Monitoring", padding="10")
-        plot_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
-        
-        # Larger figure size for full screen
-        self.fig = Figure(figsize=(16, 6))
-        self.ax1 = self.fig.add_subplot(131)
-        self.ax2 = self.fig.add_subplot(132)
-        self.ax3 = self.fig.add_subplot(133)
-        
-        # Style plots
-        for ax in [self.ax1, self.ax2, self.ax3]:
-            ax.grid(True, linestyle='--', alpha=0.7)
-            ax.set_facecolor('#f8f9fa')
-        
-        self.fig.set_facecolor('#ffffff')
-        
-        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        # Add toolbar (optional)
-        from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-        toolbar = NavigationToolbar2Tk(self.canvas, plot_frame)
-        toolbar.update()
-        
-        # Initial empty plots
-        self.ax1.set_title('Flow 1')
-        self.ax1.set_ylabel('ln/min')
-        self.ax1.text(0.5, 0.5, 'Waiting for data...', 
-                     horizontalalignment='center',
-                     verticalalignment='center',
-                     transform=self.ax1.transAxes)
-        
-        self.ax2.set_title('Flow 2')
-        self.ax2.set_ylabel('ln/min')
-        self.ax2.text(0.5, 0.5, 'Waiting for data...', 
-                     horizontalalignment='center',
-                     verticalalignment='center',
-                     transform=self.ax2.transAxes)
-        
-        self.ax3.set_title('Concentration')
-        self.ax3.set_ylabel('ppm')
-        self.ax3.text(0.5, 0.5, 'Waiting for data...', 
-                     horizontalalignment='center',
-                     verticalalignment='center',
-                     transform=self.ax3.transAxes)
-        
-        self.canvas.draw()
-
-    def start_updates(self):
-        def update():
-            self.update_readings()
-            self.update_plots()
-            self.after(1000, update)  # Schedule next update
+                
         update()  # Start the update loop
-
-    def update_plots(self):
-        """Update the plots with current data"""
+    
+    def collect_plot_data(self):
+        """Collect data for plotting without actually updating any plots"""
         if not self.controller.is_connected():
-            return  # Skip plot updates if not connected
+            return  # Skip data collection if not connected
 
         try:
             address_1 = self.instrument_addresses['gas1']
@@ -483,38 +390,6 @@ class MainWindow(tk.Frame):
             self.flow1_data['pv'].append(flow1)
             self.flow2_data['pv'].append(flow2)
 
-            # Limit data points
-            max_points = 300
-            if len(self.times) > max_points:
-                self.times = self.times[-max_points:]
-                self.flow1_data['pv'] = self.flow1_data['pv'][-max_points:]
-                self.flow2_data['pv'] = self.flow2_data['pv'][-max_points:]
-
-            # --- Plot Flow 1 ---
-            self.ax1.clear()
-            self.ax1.set_title('Flow 1')
-            self.ax1.set_ylabel('ln/min')
-            self.ax1.grid(True, linestyle='--', alpha=0.7)
-            if self.flow1_data['pv']:
-                self.ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
-                self.ax1.legend(loc='best')
-            else:
-                self.ax1.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
-                              verticalalignment='center', transform=self.ax1.transAxes)
-
-            # --- Plot Flow 2 ---
-            self.ax2.clear()
-            self.ax2.set_title('Flow 2')
-            self.ax2.set_ylabel('ln/min')
-            self.ax2.grid(True, linestyle='--', alpha=0.7)
-            if self.flow2_data['pv']:
-                self.ax2.plot(self.times, self.flow2_data['pv'], 'g-', label='Measured')
-                self.ax2.legend(loc='best')
-            else:
-                self.ax2.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
-                              verticalalignment='center', transform=self.ax2.transAxes)
-
-            # --- Plot Concentration ---
             # Calculate actual concentration
             C1 = self.variables['C1_ppm'].get()
             C2 = self.variables['C2_ppm'].get()
@@ -526,10 +401,50 @@ class MainWindow(tk.Frame):
             target_conc = self.variables['C_tot_ppm'].get()
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
-            if len(self.conc_data['target']) > max_points:
+
+            # Limit data points
+            max_points = 300
+            if len(self.times) > max_points:
+                self.times = self.times[-max_points:]
+                self.flow1_data['pv'] = self.flow1_data['pv'][-max_points:]
+                self.flow2_data['pv'] = self.flow2_data['pv'][-max_points:]
                 self.conc_data['target'] = self.conc_data['target'][-max_points:]
                 self.conc_data['actual'] = self.conc_data['actual'][-max_points:]
 
+        except Exception as e:
+            print(f"Error collecting plot data: {e}")
+
+    def update_plots(self):
+        """Update the main window plots with current data"""
+        if not self.controller.is_connected() or not hasattr(self, 'ax1'):
+            return  # Skip plot updates if not connected or plots not initialized
+
+        try:
+            # --- Plot Flow 1 ---
+            self.ax1.clear()
+            self.ax1.set_title('Flow 1')
+            self.ax1.set_ylabel('ln/min')
+            self.ax1.grid(True, linestyle='--', alpha=0.7)
+            if self.flow1_data['pv']:
+                self.ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
+                self.ax1.legend(loc='best')
+            else:
+                self.ax1.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
+                            verticalalignment='center', transform=self.ax1.transAxes)
+
+            # --- Plot Flow 2 ---
+            self.ax2.clear()
+            self.ax2.set_title('Flow 2')
+            self.ax2.set_ylabel('ln/min')
+            self.ax2.grid(True, linestyle='--', alpha=0.7)
+            if self.flow2_data['pv']:
+                self.ax2.plot(self.times, self.flow2_data['pv'], 'g-', label='Measured')
+                self.ax2.legend(loc='best')
+            else:
+                self.ax2.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
+                            verticalalignment='center', transform=self.ax2.transAxes)
+
+            # --- Plot Concentration ---
             self.ax3.clear()
             self.ax3.plot(self.times, self.conc_data['actual'], 'b-', label='Actual')
             self.ax3.plot(self.times, self.conc_data['target'], 'r--', label='Target')
@@ -541,7 +456,7 @@ class MainWindow(tk.Frame):
 
             self.canvas.draw()
         except Exception as e:
-            print(f"Error updating plots: {e}")
+            print(f"Error updating main plots: {e}")
         
 
 
@@ -816,7 +731,11 @@ class MainWindow(tk.Frame):
         """Start periodic updates of instrument readings and plots"""
         def update():
             try:
+                # Always update readings
                 self.update_readings()
+                
+                # Collect data for plots
+                self.collect_plot_data()
                 
                 # Update main window plots if on Windows
                 if not self.is_raspberry:
