@@ -356,27 +356,40 @@ class MainWindow(tk.Frame):
                 self.after(1000, update)  # Schedule next update in 1 second
                 
         update()  # Start the update loop
-    
     def collect_plot_data(self):
         """Collect data for plotting without actually updating any plots"""
         if not self.controller.is_connected():
-            return  # Skip data collection if not connected
-
+            print("Skipping data collection: Controller not connected")
+            return
+            
         try:
             address_1 = self.instrument_addresses['gas1']
             address_2 = self.instrument_addresses['gas2']
 
             if address_1 is None or address_2 is None:
-                return  # Skip if addresses are not valid
+                print(f"Skipping data collection: Missing addresses (gas1={address_1}, gas2={address_2})")
+                return
 
             # Get readings for both instruments
             readings_1 = self.controller.get_readings(address_1)
             readings_2 = self.controller.get_readings(address_2)
+            
+            # Debug readings
+            print(f"Readings from addr {address_1}: {readings_1}")
+            print(f"Readings from addr {address_2}: {readings_2}")
 
+            # Ensure 'Flow' exists in readings
+            if 'Flow' not in readings_1 or 'Flow' not in readings_2:
+                print("Missing Flow readings in controller response")
+                return
+                
             flow1 = readings_1.get('Flow', 0)
             flow2 = readings_2.get('Flow', 0)
             unit1 = readings_1.get('Unit', 'ln/min')
             unit2 = readings_2.get('Unit', 'ln/min')
+
+            # Debug flow values
+            print(f"Flow values: flow1={flow1} {unit1}, flow2={flow2} {unit2}")
 
             # Convert to ln/min if needed
             if unit1 in ("ml/min", "mln/min"):
@@ -402,6 +415,12 @@ class MainWindow(tk.Frame):
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
 
+            # Print debug info
+            print(f"Added data point: time={now}, flow1={flow1}, flow2={flow2}, conc={actual_conc}")
+
+            # Verify data arrays have content
+            print(f"Data arrays: times={len(self.times)}, flow1={len(self.flow1_data['pv'])}, flow2={len(self.flow2_data['pv'])}")
+
             # Limit data points
             max_points = 300
             if len(self.times) > max_points:
@@ -413,6 +432,8 @@ class MainWindow(tk.Frame):
 
         except Exception as e:
             print(f"Error collecting plot data: {e}")
+            import traceback
+            traceback.print_exc()
 
     def update_plots(self):
         """Update the main window plots with current data"""
@@ -727,27 +748,49 @@ class MainWindow(tk.Frame):
         # Draw the updated figure
         self.popup_canvas.draw()
 
-    def start_updates(self):
-        """Start periodic updates of instrument readings and plots"""
-        def update():
-            try:
-                # Always update readings
-                self.update_readings()
-                
-                # Collect data for plots
-                self.collect_plot_data()
-                
-                # Update main window plots if on Windows
-                if not self.is_raspberry:
-                    self.update_plots()
+    def update_readings(self):
+        """Update instrument readings in the UI"""
+        if not self.controller.is_connected():
+            return
+            
+        # Get addresses of instruments
+        address_1 = self.instrument_addresses.get('gas1')
+        address_2 = self.instrument_addresses.get('gas2')
+        
+        # Skip if no addresses are set
+        if address_1 is None and address_2 is None:
+            return
+            
+        # Update readings for each valid address
+        for addr in [address_1, address_2]:
+            if addr is not None and addr in self.reading_labels:
+                try:
+                    # Get readings from controller
+                    readings = self.controller.get_readings(addr)
                     
-                # Update popup graphs if window is open
-                if hasattr(self, 'graph_window_open') and self.graph_window_open:
-                    self.update_popup_graphs()
+                    # Debug readings to command output
+                    self.print_to_command_output(f"Debug - Readings for addr {addr}: {readings}")
                     
-            except Exception as e:
-                print(f"Update error: {e}")
-            finally:
-                self.after(1000, update)  # Schedule next update in 1 second
-                
-        update()  # Start the update loop
+                    # Update each parameter label
+                    for param in ['Flow', 'Valve', 'Temperature']:
+                        if param in readings and param in self.reading_labels[addr]:
+                            value = readings[param]
+                            
+                            # Format value based on parameter type
+                            if param == 'Flow':
+                                formatted = f"{value:.3f}"
+                            elif param == 'Valve':
+                                formatted = f"{value:.1f}"
+                            elif param == 'Temperature':
+                                formatted = f"{value:.1f}"
+                            else:
+                                formatted = str(value)
+                                
+                            self.reading_labels[addr][param].config(text=formatted)
+                    
+                    # Update unit label if available
+                    if 'Unit' in readings and 'Unit' in self.reading_labels[addr]:
+                        self.reading_labels[addr]['Unit'].config(text=readings['Unit'])
+                        
+                except Exception as e:
+                    print(f"Error updating readings for address {addr}: {e}")
