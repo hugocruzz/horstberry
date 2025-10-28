@@ -8,7 +8,7 @@ DISPLAY_CONFIG = {
 }
 
 CONNECTION_CONFIG = {
-    'port': 'COM5',
+    'port': 'COM13',
     'addresses': [5, 8],
     'baudrate': 38400
 }

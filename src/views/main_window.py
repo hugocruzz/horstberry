@@ -1,23 +1,21 @@
 import tkinter as tk
 from tkinter import ttk
 from typing import Dict, Any
-import time
 from threading import Thread
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
-from datetime import datetime, timedelta
-import numpy as np
+from datetime import datetime
 from ..models.data_logger import DataLogger
 from ..models.calculations import calculate_real_outflow
-import subprocess
-import platform
-from tkinter import simpledialog, messagebox
+import matplotlib.dates as mdates
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import numpy as np
 
 KNOWN_FLOW_RANGES = {
     8: (0.13604, 10, "mln/min"),
     3: (0.012023, 1.5, "ln/min"),
     5: (1.233, 150, "mln/min"),
+    10: (0.012023, 1.5, "ln/min"),
+    20: (0.012023, 1.5, "ln/min"),
 }
 
 class MainWindow(tk.Frame):
@@ -27,8 +25,8 @@ class MainWindow(tk.Frame):
         self.controller = controller
         self.settings = settings
         
-        # Add this line early in __init__ before calling setup_gui
-        self.is_raspberry = platform.system() == 'Linux'
+        # The application will only run on Windows, so is_raspberry can be set to False
+        self.is_raspberry = False
         
         # Configure window size and position
         window_width = self.settings.get('width', 1024)
@@ -83,9 +81,12 @@ class MainWindow(tk.Frame):
         # Setup UI components - make sure this is called after is_raspberry is set
         self.setup_gui()
         
-        # Only setup plots on non-Raspberry Pi systems (will show on demand on Raspberry Pi)
-        if not self.is_raspberry:
-            self.setup_plots()
+        # Add a command output window (Text widget) at the bottom, spanning all columns
+        self.command_output = tk.Text(
+            self.main_container, height=8, width=80, state='disabled',
+            bg='#f4f4f4', font=('Consolas', 11)
+        )
+        self.command_output.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
         
         # Add a welcome message prompting to scan for instruments
         self.update_status("Welcome! Please scan for instruments to get started", "blue")
@@ -94,15 +95,6 @@ class MainWindow(tk.Frame):
         self.start_updates()
         self.pack(fill=tk.BOTH, expand=True)
 
-        # Add a command output window (Text widget) at the bottom, spanning both columns
-        # ...existing code...
-        self.command_output = tk.Text(
-            self.main_container, height=8, width=80, state='disabled',
-            bg='#f4f4f4', font=('Consolas', 11)
-        )
-        self.command_output.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
-        self.main_container.grid_rowconfigure(1, weight=0)
-
     def update_status(self, message: str, color: str = "black"):
         """Update status message"""
         if 'Status' not in self.status_labels:
@@ -110,116 +102,317 @@ class MainWindow(tk.Frame):
             self.status_labels['Status'].grid(row=1, column=0, columnspan=2, pady=5)
         self.status_labels['Status'].config(text=message, foreground=color)
 
+    def print_to_command_output(self, message: str):
+        """Prints a message to the command output text widget."""
+        now = datetime.now().strftime("%H:%M:%S")
+        full_message = f"[{now}] {message}\n"
+        
+        if hasattr(self, 'command_output'):
+            self.command_output.config(state='normal')
+            self.command_output.insert(tk.END, full_message)
+            self.command_output.config(state='disabled')
+            self.command_output.see(tk.END) # Scroll to the end
+        else:
+            print(full_message) # Fallback to console if text widget not ready
+
     def setup_gui(self):
         # Use a regular frame as the main container
         self.main_container = ttk.Frame(self, padding="10")
         self.main_container.grid(row=0, column=0, sticky="nsew")
 
-        # Configure grid weights
-        self.main_container.grid_columnconfigure(1, weight=1)
-        self.main_container.grid_rowconfigure(0, weight=1)
+        # Configure main frame grid weights
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
 
-        # Create frames with better styling
-        self.concentration_frame = ttk.LabelFrame(
-            self.main_container, 
-            text="Concentration Control",
-            padding="10"
-        )
+        # Configure main container grid weights for proper resizing
+        self.main_container.grid_columnconfigure(0, weight=0)  # Left panel (fixed width)
+        self.main_container.grid_columnconfigure(1, weight=1)  # Center panel (instruments)
+        self.main_container.grid_columnconfigure(2, weight=2)  # Right panel (plots)
+        self.main_container.grid_rowconfigure(0, weight=1)     # Main content area
+        self.main_container.grid_rowconfigure(1, weight=0)     # Command output (fixed height)
+
+        # --- Left Panel for Connection and Concentration ---
+        left_panel = ttk.Frame(self.main_container)
+        left_panel.grid(row=0, column=0, padx=10, pady=5, sticky="ns")
+        
+        self.setup_connection_panel(left_panel)
+        self.setup_concentration_panel(left_panel)
+
+        # --- Center Panel for Direct Flow Control ---
         self.flow_frame = ttk.LabelFrame(
             self.main_container, 
             text="Direct Flow Control",
             padding="10"
         )
-        
-        # Position frames
-        self.concentration_frame.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
         self.flow_frame.grid(row=0, column=1, padx=10, pady=5, sticky="nsew")
-        
-        self.setup_concentration_panel()
-        self.setup_flow_panel()
+        self.setup_flow_panel() # This now just sets up the scrollable container
 
-        # For Raspberry Pi, don't add the plot area to the main window
-        # Instead, add a button to show the graphs in a separate window
-        if self.is_raspberry:
-            show_graph_btn = ttk.Button(
-                self.main_container,
-                text="Show Graphs",
-                command=self.open_graph_window
-            )
-            show_graph_btn.grid(row=2, column=0, columnspan=2, pady=(10, 0), sticky="ew")
-        else:
-            # For Windows, include the plots in the main window as before
-            self.setup_plots()
+        # --- Right Panel for Plots ---
+        plot_frame = ttk.Frame(self.main_container)
+        plot_frame.grid(row=0, column=2, padx=10, pady=5, sticky="nsew")
         
-    def setup_concentration_panel(self):
-        # Concentration inputs
+        # Create plots in the right panel
+        if not self.is_raspberry:
+            self.fig, self.ax1, self.ax2, self.ax3, self.canvas = self.create_plot_canvas(plot_frame)
+
+    def setup_connection_panel(self, parent):
+        """Sets up the panel for COM port selection and scanning. This is now static."""
+        connection_frame = ttk.LabelFrame(parent, text="Connection")
+        connection_frame.pack(padx=0, pady=5, fill="x", side=tk.TOP)
+
+        com_port_label = ttk.Label(connection_frame, text="COM Port:")
+        com_port_label.pack(side=tk.LEFT, padx=(10, 5), pady=5)
+
+        self.com_port_var = tk.StringVar()
+        ports = [f"COM{i}" for i in range(1, 15)]
+        self.com_port_dropdown = ttk.Combobox(
+            connection_frame,
+            textvariable=self.com_port_var,
+            values=ports,
+            state="readonly",
+            width=10
+        )
+        self.com_port_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
+        self.com_port_dropdown.bind("<<ComboboxSelected>>", self.on_com_port_selected)
+
+        # Set default port from settings or controller, defaulting to COM13
+        default_port = self.controller.get_port() or self.settings.get('port', 'COM13')
+        self.com_port_var.set(default_port)
+        # Configure controller with the default port if not already set
+        if not self.controller.get_port():
+            self.controller.set_port(default_port)
+            self.print_to_command_output(f"COM Port set to {default_port}")
+
+        self.scan_button = ttk.Button(
+            connection_frame, text="Scan Instruments", command=self.scan_instruments
+        )
+        self.scan_button.pack(side=tk.RIGHT, padx=10, pady=5)
+
+    def setup_concentration_panel(self, parent):
+        """Sets up the concentration control panel. This is now static."""
+        self.concentration_frame = ttk.LabelFrame(
+            parent, 
+            text="Concentration Control",
+            padding="10"
+        )
+        self.concentration_frame.pack(padx=0, pady=5, fill="x", side=tk.TOP)
+        
         row = 0
+        
+        # Gas 1 (low concentration) instrument selection
+        ttk.Label(self.concentration_frame, text="Gas 1 Address:").grid(
+            row=row, column=0, padx=5, pady=5, sticky="w")
+        self.gas1_address_var = tk.StringVar(value="Not assigned")
+        self.gas1_dropdown = ttk.Combobox(
+            self.concentration_frame,
+            textvariable=self.gas1_address_var,
+            values=["Not assigned"],
+            state="readonly",
+            width=12
+        )
+        self.gas1_dropdown.grid(row=row, column=1, padx=5, pady=5, sticky="e")
+        self.gas1_dropdown.bind("<<ComboboxSelected>>", self.on_gas1_selected)
+        row += 1
+        
+        # Gas 2 (high concentration) instrument selection
+        ttk.Label(self.concentration_frame, text="Gas 2 Address:").grid(
+            row=row, column=0, padx=5, pady=5, sticky="w")
+        self.gas2_address_var = tk.StringVar(value="Not assigned")
+        self.gas2_dropdown = ttk.Combobox(
+            self.concentration_frame,
+            textvariable=self.gas2_address_var,
+            values=["Not assigned"],
+            state="readonly",
+            width=12
+        )
+        self.gas2_dropdown.grid(row=row, column=1, padx=5, pady=5, sticky="e")
+        self.gas2_dropdown.bind("<<ComboboxSelected>>", self.on_gas2_selected)
+        row += 1
+        
+        # Separator
+        ttk.Separator(self.concentration_frame, orient='horizontal').grid(
+            row=row, column=0, columnspan=2, sticky='ew', pady=10)
+        row += 1
+        
         for key in ['C_tot_ppm', 'C1_ppm', 'C2_ppm']:
             ttk.Label(self.concentration_frame, text=f"{key}:").grid(
-                row=row, column=0, padx=5, pady=5)
+                row=row, column=0, padx=5, pady=5, sticky="w")
             ttk.Entry(self.concentration_frame, 
-                    textvariable=self.variables[key]).grid(
-                row=row, column=1, padx=5, pady=5)
+                    textvariable=self.variables[key], width=10).grid(
+                row=row, column=1, padx=5, pady=5, sticky="e")
             row += 1
 
-        # Max flow input
         ttk.Label(self.concentration_frame, text="Max Flow (ln/min):").grid(
-            row=row, column=0, padx=5, pady=5)
-        self.variables['max_flow'] = tk.DoubleVar(value=1.5)  # Default max flow
+            row=row, column=0, padx=5, pady=5, sticky="w")
+        self.variables['max_flow'] = tk.DoubleVar(value=1.5)
         ttk.Entry(self.concentration_frame, 
-                textvariable=self.variables['max_flow']).grid(
-            row=row, column=1, padx=5, pady=5)
+                textvariable=self.variables['max_flow'], width=10).grid(
+            row=row, column=1, padx=5, pady=5, sticky="e")
         row += 1
 
-        # Calculate button
         ttk.Button(self.concentration_frame, 
                 text="Calculate Flows",
                 command=self.calculate_flows).grid(
             row=row, column=0, columnspan=2, pady=10)
-    def setup_flow_panel(self):
-        # Flow controls for each instrument remain defined by their address and name
-        addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
-        names = ['Gas 1', 'Gas 2']
-        
-        # Add scan button at the top
-        scan_button = ttk.Button(
-            self.flow_frame, 
-            text="Scan for Instruments",
-            command=self.scan_instruments
-        )
-        scan_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
-        
-        # Add instrument controls panels for each instrument
-        for i, (addr, name) in enumerate(zip(addresses, names)):
-            group = ttk.LabelFrame(self.flow_frame, text=f"{name} Control (Addr: {addr})")
-            group.grid(row=1, column=i, padx=5, pady=5)
-            self.setup_instrument_controls(group, addr)
-        
-        # Add global Start and Stop buttons below the instrument panels (span both columns)
-        start_button = ttk.Button(
-            self.flow_frame,
-            text="Start",
-            command=self.start_all_flows
-        )
-        start_button.grid(row=2, column=0, padx=5, pady=10, sticky="ew")
-        
-        stop_button = ttk.Button(
-            self.flow_frame,
-            text="Stop",
-            command=self.stop_all_flows
-        )
-        stop_button.grid(row=2, column=1, padx=5, pady=10, sticky="ew")
 
-    def setup_instrument_controls(self, parent: ttk.Frame, addr: int):
-        control_frame = ttk.Frame(parent, padding="5")
+    def on_gas1_selected(self, event):
+        """Handle Gas 1 instrument selection."""
+        selected = self.gas1_address_var.get()
+        if selected != "Not assigned":
+            try:
+                addr = int(selected)
+                self.instrument_addresses['gas1'] = addr
+                self.print_to_command_output(f"Gas 1 (low conc.) assigned to address {addr}")
+                self.update_status(f"Gas 1 assigned to address {addr}", "green")
+            except ValueError:
+                pass
+    
+    def on_gas2_selected(self, event):
+        """Handle Gas 2 instrument selection."""
+        selected = self.gas2_address_var.get()
+        if selected != "Not assigned":
+            try:
+                addr = int(selected)
+                self.instrument_addresses['gas2'] = addr
+                self.print_to_command_output(f"Gas 2 (high conc.) assigned to address {addr}")
+                self.update_status(f"Gas 2 assigned to address {addr}", "green")
+            except ValueError:
+                pass
+
+    def on_com_port_selected(self, event):
+        """Handle COM port selection from the dropdown."""
+        selected_port = self.com_port_var.get()
+        self.controller.set_port(selected_port)
+        self.print_to_command_output(f"COM Port set to {selected_port}")
+        self.update_status(f"Port set to {selected_port}. Ready to scan.", "blue")
+
+    def scan_instruments(self):
+        """Scan for connected instruments and update the UI."""
+        self.print_to_command_output("Scanning for instruments...")
+        self.scan_button.config(state="disabled")
+        
+        def scan_thread():
+            try:
+                found_instruments = self.controller.scan_for_instruments()
+                self.after(0, lambda: self.print_to_command_output(f"Found instruments at addresses: {found_instruments}"))
+                self.after(0, self.update_ui_with_scan_results, found_instruments)
+            except Exception as e:
+                self.after(0, lambda: self.print_to_command_output(f"Scan failed: {e}"))
+            finally:
+                self.after(0, lambda: self.scan_button.config(state="normal"))
+
+        Thread(target=scan_thread, daemon=True).start()
+
+    def update_ui_with_scan_results(self, found_instruments):
+        """Update UI after scanning is complete. ONLY updates the scrollable frame."""
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        if not self.controller.is_connected() or not found_instruments:
+            self.print_to_command_output("No instruments found or connection failed.")
+            self.update_status("Scan complete. No instruments found.", "orange")
+            ttk.Label(self.scrollable_frame, text="No instruments found.").pack(pady=20)
+            return
+
+        instruments_metadata = self.controller.get_instrument_metadata()
+        self.print_to_command_output(f"Connected to {len(instruments_metadata)} instruments at addresses: {list(instruments_metadata.keys())}")
+        
+        # Update Gas1 and Gas2 dropdowns with available addresses
+        address_list = [str(addr) for addr in sorted(instruments_metadata.keys())]
+        self.gas1_dropdown['values'] = address_list
+        self.gas2_dropdown['values'] = address_list
+        
+        # Auto-assign first two instruments if available
+        if len(address_list) >= 2:
+            self.gas1_address_var.set(address_list[0])
+            self.gas2_address_var.set(address_list[1])
+            self.instrument_addresses['gas1'] = int(address_list[0])
+            self.instrument_addresses['gas2'] = int(address_list[1])
+            self.print_to_command_output(f"Auto-assigned: Gas1={address_list[0]}, Gas2={address_list[1]}")
+        elif len(address_list) == 1:
+            self.gas1_address_var.set(address_list[0])
+            self.instrument_addresses['gas1'] = int(address_list[0])
+            self.print_to_command_output(f"Auto-assigned: Gas1={address_list[0]}")
+        
+        for addr, metadata in instruments_metadata.items():
+            self.setup_instrument_controls(self.scrollable_frame, addr, metadata)
+            
+        self.update_status(f"Scan complete. Found {len(instruments_metadata)} instruments.", "green")
+        self.instruments_scanned = True
+
+    def start_all_flows(self):
+        """Start flow on all connected instruments."""
+        if not self.controller.is_connected():
+            self.update_status("Please connect and scan for instruments first.", "orange")
+            return
+        self.print_to_command_output("Starting all flows...")
+        self.controller.start_all()
+
+    def stop_all_flows(self):
+        """Stop flow on all connected instruments."""
+        if not self.controller.is_connected():
+            self.update_status("Please connect and scan for instruments first.", "orange")
+            return
+        self.print_to_command_output("Stopping all flows...")
+        self.controller.stop_all()
+
+    def setup_flow_panel(self):
+        """Sets up the panel that contains the scrollable list of instruments."""
+        canvas = tk.Canvas(self.flow_frame, borderwidth=0)
+        self.scrollable_frame = ttk.Frame(canvas)
+        scrollbar = ttk.Scrollbar(self.flow_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        canvas_window = canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        def on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas_configure(event):
+            # When canvas is resized, update the width of the scrollable frame
+            canvas.itemconfig(canvas_window, width=event.width)
+
+        self.scrollable_frame.bind("<Configure>", on_frame_configure)
+        canvas.bind("<Configure>", on_canvas_configure)
+
+    def setup_instrument_controls(self, parent: ttk.Frame, addr: int, metadata: Dict[str, Any] = None):
+        """Setup controls for a single instrument with metadata display."""
+        if metadata is None:
+            metadata = self.controller.get_instrument_metadata(addr)
+        
+        # Create a labeled frame for this instrument
+        instrument_frame = ttk.LabelFrame(
+            parent, 
+            text=f"Instrument Address {addr}",
+            padding="10"
+        )
+        instrument_frame.pack(fill=tk.X, expand=True, pady=5)
+        
+        control_frame = ttk.Frame(instrument_frame)
         control_frame.pack(fill=tk.X, expand=True)
         
+        # Display min/max flow range
+        min_flow = metadata.get('min_flow', 0.0)
+        max_flow = metadata.get('max_flow', 0.0)
+        unit = metadata.get('unit', 'ln/min')
+        
+        range_label = ttk.Label(
+            control_frame, 
+            text=f"Range: {min_flow:.4f} - {max_flow:.2f} {unit}",
+            font=('Helvetica', 11, 'italic'),
+            foreground='blue'
+        )
+        range_label.grid(row=0, column=0, columnspan=5, padx=5, pady=(0, 5), sticky='w')
+        
         # Flow setter label and entry
-        ttk.Label(control_frame, text="Set Flow:", width=10).grid(row=0, column=0, padx=5, pady=2)
+        ttk.Label(control_frame, text="Set Flow:", width=10).grid(row=1, column=0, padx=5, pady=2)
         entry = ttk.Entry(control_frame, width=10)
-        entry.grid(row=0, column=1, padx=5, pady=2)
-        unit_label = ttk.Label(control_frame, text="ln/min", width=6)  # Default unit
-        unit_label.grid(row=0, column=2, padx=2, pady=2)
+        entry.grid(row=1, column=1, padx=5, pady=2)
+        unit_label = ttk.Label(control_frame, text=unit, width=8)
+        unit_label.grid(row=1, column=2, padx=2, pady=2)
         
         # Save the entry and unit label for later use
         self.flow_entries[addr] = entry
@@ -227,16 +420,24 @@ class MainWindow(tk.Frame):
             self.reading_labels[addr] = {}
         self.reading_labels[addr]['Unit'] = unit_label
 
+        # Add a "Set" button next to the entry
+        set_button = ttk.Button(
+            control_frame,
+            text="Set",
+            command=lambda a=addr: self.set_manual_flow(a)
+        )
+        set_button.grid(row=1, column=4, padx=5, pady=2)
+
         # Reading displays
         params = [
-            ('Flow', 'ln/min'),
+            ('Flow', unit),
             ('Valve', '%'),
             ('Temperature', '°C')
         ]
         
-        for i, (param, unit) in enumerate(params):
+        for i, (param, param_unit) in enumerate(params):
             frame = ttk.Frame(control_frame)
-            frame.grid(row=i+1, column=0, columnspan=4, sticky='ew', pady=2)
+            frame.grid(row=i+2, column=0, columnspan=5, sticky='ew', pady=2)
             
             ttk.Label(frame, text=f"{param}:", width=10).pack(side=tk.LEFT, padx=5)
             self.reading_labels[addr][param] = ttk.Label(
@@ -248,7 +449,20 @@ class MainWindow(tk.Frame):
                 anchor='center'
             )
             self.reading_labels[addr][param].pack(side=tk.LEFT, padx=5)
-            ttk.Label(frame, text=unit, width=6).pack(side=tk.LEFT, padx=2)
+            ttk.Label(frame, text=param_unit, width=8).pack(side=tk.LEFT, padx=2)
+
+    def set_manual_flow(self, address: int):
+        """Set the flow for an instrument from its manual entry field."""
+        try:
+            flow_str = self.flow_entries[address].get()
+            flow = float(flow_str)
+            self.controller.set_flow(address, flow)
+            self.print_to_command_output(f"Manually set flow for address {address} to {flow:.3f}")
+        except ValueError:
+            self.print_to_command_output(f"Invalid flow value entered for address {address}: '{flow_str}'")
+        except Exception as e:
+            self.print_to_command_output(f"Error setting flow for address {address}: {e}")
+
     def calculate_flows(self):
         if not self.controller.is_connected():
             self.update_status("Please connect the instruments", "red")
@@ -302,10 +516,33 @@ class MainWindow(tk.Frame):
                 self.print_to_command_output(f"Locally calculated flows: Q1={Q1:.3f}, Q2={Q2:.3f}")
             
             # Map to instrument addresses
-            addr1 = self.instrument_addresses['gas1']
-            addr2 = self.instrument_addresses['gas2']
+            addr1 = self.instrument_addresses.get('gas1')
+            addr2 = self.instrument_addresses.get('gas2')
+            
+            # Check if roles have been assigned
+            if addr1 is None or addr2 is None:
+                self.update_status("Please assign instrument roles first (Gas1 and Gas2).", "orange")
+                self.print_to_command_output("Please assign instrument roles using 'Assign Roles' button.")
+                return
             
             flows = {addr1: Q1, addr2: Q2}
+            
+            # Pre-fill the flow entry fields with calculated values
+            for addr, flow in flows.items():
+                if addr in self.flow_entries:
+                    # Get the unit from controller
+                    unit = self.controller.read_unit(addr)
+                    
+                    # Convert flow value based on unit if needed
+                    converted_flow = flow
+                    if isinstance(flow, (float, int)):
+                        # If unit is ml/min, convert from ln/min
+                        if unit == "ml/min":
+                            converted_flow = flow * 1000  # Convert ln/min to ml/min
+                        
+                        # Pre-fill the entry field
+                        self.flow_entries[addr].delete(0, tk.END)
+                        self.flow_entries[addr].insert(0, f"{converted_flow:.3f}")
             
             # Display calculated flows with units
             flow_messages = []
@@ -325,6 +562,7 @@ class MainWindow(tk.Frame):
 
             result_msg = "Calculated: " + ", ".join(flow_messages)
             self.print_to_command_output(result_msg)
+            self.update_status("Flows calculated and pre-filled. Click 'Set' to apply.", "green")
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
             self.print_to_command_output(f"Error: {str(e)}")
@@ -334,20 +572,24 @@ class MainWindow(tk.Frame):
 
     def start_updates(self):
         """Start periodic updates of instrument readings and plots"""
+        self.update_counter = 0  # Add a counter for controlling plot update frequency
+        
         def update():
             try:
-                # Always update readings
+                self.update_counter += 1
+                
+                # Always update readings (every second)
                 self.update_readings()
                 
-                # Collect data for plots
+                # Collect data for plots (every second)
                 self.collect_plot_data()
                 
-                # Update main window plots if on Windows
-                if not self.is_raspberry:
+                # Update plots less frequently to improve performance (every 2 seconds)
+                if not self.is_raspberry and self.update_counter % 2 == 0:
                     self.update_plots()
                     
-                # Update popup graphs if window is open
-                if hasattr(self, 'graph_window_open') and self.graph_window_open:
+                # Update popup graphs if window is open (every 2 seconds)
+                if hasattr(self, 'graph_window_open') and self.graph_window_open and self.update_counter % 2 == 0:
                     self.update_popup_graphs()
                     
             except Exception as e:
@@ -359,17 +601,14 @@ class MainWindow(tk.Frame):
     def collect_plot_data(self):
         """Collect data for plotting without actually updating any plots"""
         if not self.controller.is_connected():
-            # Remove debug message
-            # print("Skipping data collection: Controller not connected")
             return
             
         try:
-            address_1 = self.instrument_addresses['gas1']
-            address_2 = self.instrument_addresses['gas2']
+            address_1 = self.instrument_addresses.get('gas1')
+            address_2 = self.instrument_addresses.get('gas2')
 
             if address_1 is None or address_2 is None:
-                # Remove debug message
-                # print(f"Skipping data collection: Missing addresses (gas1={address_1}, gas2={address_2})")
+                # Skip data collection if roles haven't been assigned yet
                 return
 
             # Get readings for both instruments
@@ -436,6 +675,29 @@ class MainWindow(tk.Frame):
             import traceback
             traceback.print_exc()
 
+    def create_plot_canvas(self, parent):
+        """Create a canvas with three subplots for flow and concentration monitoring."""
+        fig = Figure(figsize=(12, 5), dpi=100)
+        fig.patch.set_facecolor('#f0f0f0')
+        
+        # Create three subplots
+        ax1 = fig.add_subplot(131)
+        ax2 = fig.add_subplot(132)
+        ax3 = fig.add_subplot(133)
+        
+        # Style the plots
+        for ax in [ax1, ax2, ax3]:
+            ax.grid(True, linestyle='--', alpha=0.6)
+            ax.tick_params(axis='x', rotation=45)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+
+        fig.tight_layout(pad=3.0)
+        
+        canvas = FigureCanvasTkAgg(fig, master=parent)
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        
+        return fig, ax1, ax2, ax3, canvas
+
     def update_plots(self):
         """Update the main window plots with current data"""
         if not self.controller.is_connected() or not hasattr(self, 'ax1'):
@@ -476,203 +738,12 @@ class MainWindow(tk.Frame):
             self.ax3.grid(True, linestyle='--', alpha=0.7)
             self.ax3.set_xlabel('Time')
 
-            self.canvas.draw()
+            # Use draw_idle() instead of draw() for better performance
+            # draw_idle() defers the actual drawing until the GUI is idle
+            self.canvas.draw_idle()
         except Exception as e:
             print(f"Error updating main plots: {e}")
         
-
-
-    def ask_flow_range(self, addr):
-        """Demande à l'utilisateur de sélectionner la plage de flow si l'adresse est inconnue."""
-        options = [
-            ("0.136...10 mln/min", (0.13604, 10, "mln/min")),
-            ("0.012...1.5 ln/min", (0.012023, 1.5, "ln/min")),
-            ("1.23...150 mln/min", (1.233, 150, "mln/min")),
-        ]
-        choice = simpledialog.askstring(
-            "Sélection du modèle",
-            f"Adresse {addr} inconnue. Sélectionnez le modèle (plage de flow) :\n"
-            + "\n".join(f"{i+1}. {opt[0]}" for i, opt in enumerate(options))
-        )
-        if not choice:
-            messagebox.showwarning("Avertissement", "Aucune plage sélectionnée, valeur par défaut 1.5 ln/min utilisée.")
-            return (0, 1.5, "ln/min")
-        try:
-            idx = int(choice.strip()) - 1
-            return options[idx][1]
-        except Exception:
-            messagebox.showwarning("Avertissement", "Sélection invalide, valeur par défaut 1.5 ln/min utilisée.")
-            return (0, 1.5, "ln/min")
-
-    def scan_instruments(self):
-        """Scan for available instruments and update addresses"""
-        if not self.controller.is_connected():
-            try:
-                # Try to connect to the serial port first
-                self.update_status("Attempting to connect and scan for instruments...", "blue")
-                
-                # Use the controller's scan method
-                found_instruments = self.controller.scan_for_instruments(start_addr=1, end_addr=24)
-                
-                if not found_instruments:
-                    self.update_status("No instruments found. Check connections.", "red")
-                    return False
-                    
-                if len(found_instruments) < 2:
-                    self.update_status(f"Found only {len(found_instruments)} instrument at address {found_instruments[0]}. Need at least 2.", "orange")
-                    # Set the first instrument address at least
-                    self.instrument_addresses['gas1'] = found_instruments[0]
-                    self.instrument_addresses['gas2'] = None  # Keep second instrument as None
-                    return False
-                            
-                # Update instrument addresses with found devices
-                self.instrument_addresses['gas1'] = found_instruments[0]
-                self.instrument_addresses['gas2'] = found_instruments[1]
-
-                # SET max_flows and units BEFORE updating the panel!
-                for addr in found_instruments:
-                    if addr in KNOWN_FLOW_RANGES:
-                        self.controller.max_flows[addr] = KNOWN_FLOW_RANGES[addr][1]
-                        self.controller.units[addr] = KNOWN_FLOW_RANGES[addr][2]
-                    else:
-                        minf, maxf, unit = self.ask_flow_range(addr)
-                        self.controller.max_flows[addr] = maxf
-                        self.controller.units[addr] = unit
-
-                # Now update labels in the UI to reflect the new addresses and correct min/max/unit
-                self.update_flow_panel_labels()
-                
-                self.update_status(f"Found instruments at addresses {found_instruments}", "green")
-                return True
-                
-            except Exception as e:
-                self.update_status(f"Error scanning for instruments: {str(e)}", "red")
-                return False
-        else:
-            # If already connected, just do a scan
-            try:
-                found_instruments = self.controller.scan_for_instruments(start_addr=1, end_addr=24)
-                
-                if not found_instruments:
-                    self.update_status("No instruments found. Check connections.", "red")
-                    return False
-                    
-                if len(found_instruments) < 2:
-                    self.update_status(f"Found only {len(found_instruments)} instrument at address {found_instruments[0]}. Need at least 2.", "orange")
-                    # Set the first instrument address at least
-                    self.instrument_addresses['gas1'] = found_instruments[0]
-                    self.instrument_addresses['gas2'] = None  # Keep second instrument as None
-                    return False
-                            
-                # Update instrument addresses with found devices
-                self.instrument_addresses['gas1'] = found_instruments[0]
-                self.instrument_addresses['gas2'] = found_instruments[1]
-                
-                # Update labels in the UI to reflect the new addresses
-                self.update_flow_panel_labels()
-                
-                self.update_status(f"Found instruments at addresses {found_instruments}", "green")
-                return True
-            except Exception as e:
-                self.update_status(f"Error scanning for instruments: {str(e)}", "red")
-                return False
-        
-    def print_to_command_output(self, message: str):
-        """Display a message in the command output window."""
-        self.command_output.config(state='normal')
-        self.command_output.insert(tk.END, message + '\n')
-        self.command_output.see(tk.END)
-        self.command_output.config(state='disabled')
-
-    def update_flow_panel_labels(self):
-        """Update the labels in the flow panel to reflect current addresses"""
-        # Clear existing controls
-        for widget in self.flow_frame.winfo_children():
-            if isinstance(widget, ttk.LabelFrame) and widget.winfo_children():
-                widget.destroy()
-
-        # Clear the flow_entries dictionary to remove references to old widgets
-        self.flow_entries.clear()
-
-        # Add instrument controls with updated addresses
-        addresses = [self.instrument_addresses['gas1'], self.instrument_addresses['gas2']]
-        names = ['Gas 1', 'Gas 2']
-
-        for i, (addr, name) in enumerate(zip(addresses, names)):
-            if addr is None:
-                continue
-            # Get min/max/unit for this instrument
-            minf = 0
-            maxf = self.controller.max_flows.get(addr, 1.5)
-            unit = self.controller.units.get(addr, "ln/min")
-            group = ttk.LabelFrame(self.flow_frame, text=f"{name} Control (Addr: {addr})")
-            group.grid(row=1, column=i, padx=5, pady=5)
-
-            # Add min/max display at the top of each instrument panel
-            minmax_label = ttk.Label(group, text=f"Min: {minf:.3f} {unit}   Max: {maxf:.3f} {unit}", foreground="blue")
-            minmax_label.pack(anchor='w', padx=5, pady=(5, 0))
-
-            self.setup_instrument_controls(group, addr)
-
-        # Make sure the scan button remains at the top
-        scan_button = ttk.Button(
-            self.flow_frame, 
-            text="Scan for Instruments",
-            command=self.scan_instruments
-        )
-        scan_button.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="ew")
-
-    def start_all_flows(self):
-        """Start all flows based on the setpoints in the GUI"""
-        try:
-            for addr, entry in self.flow_entries.items():
-                try:
-                    flow_str = entry.get().replace(',', '.')
-                    if flow_str.strip() == "":
-                        continue  # Skip empty entries
-                    flow_val = float(flow_str)
-                    max_flow = self.controller.max_flows.get(addr, 1.5)  # Default to 1.5 if not set
-
-                    # Validate the flow value against the max flow for the instrument
-                    if not 0 <= flow_val <= max_flow:
-                        raise ValueError(f"Flow must be between 0 and {max_flow} for address {addr}")
-
-                    # Set the flow for the instrument
-                    if self.controller.set_flow(addr, flow_val):
-                        self.print_to_command_output(f"Flow set for address {addr}: {flow_val} (Max Flow: {max_flow})")
-                    else:
-                        self.print_to_command_output(f"Failed to set flow for address {addr}")
-                except ValueError as e:
-                    self.print_to_command_output(f"Invalid flow value for address {addr}: {e}")
-                except Exception as e:
-                    self.print_to_command_output(f"Error setting flow for address {addr}: {e}")
-        except Exception as e:
-            self.print_to_command_output(f"Error in start_all_flows: {e}")
-
-            
-    def stop_all_flows(self):
-        """Set all instrument flows to zero."""
-        for addr in self.flow_entries.keys():
-            if self.controller.set_flow(addr, 0):
-                self.update_status(f"Flow at address {addr} set to 0 ln/min", "green")
-            else:
-                self.update_status(f"Failed to set flow at address {addr} to 0", "red")
-
-    def create_plot_canvas(self, parent):
-        """Create and return a matplotlib FigureCanvasTkAgg in the given parent."""
-        fig = Figure(figsize=(16, 6))
-        ax1 = fig.add_subplot(131)
-        ax2 = fig.add_subplot(132)
-        ax3 = fig.add_subplot(133)
-        for ax in [ax1, ax2, ax3]:
-            ax.grid(True, linestyle='--', alpha=0.7)
-            ax.set_facecolor('#f8f9fa')
-        fig.set_facecolor('#ffffff')
-        canvas = FigureCanvasTkAgg(fig, master=parent)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        return fig, ax1, ax2, ax3, canvas
-
     def open_graph_window(self):
         """Open the graph in a new window."""
         graph_win = tk.Toplevel(self)
@@ -746,31 +817,20 @@ class MainWindow(tk.Frame):
         self.popup_ax3.legend(loc='best')
         self.popup_ax3.grid(True, linestyle='--', alpha=0.7)
         
-        # Draw the updated figure
-        self.popup_canvas.draw()
+        # Use draw_idle() for better performance
+        self.popup_canvas.draw_idle()
 
     def update_readings(self):
         """Update instrument readings in the UI"""
         if not self.controller.is_connected():
             return
             
-        # Get addresses of instruments
-        address_1 = self.instrument_addresses.get('gas1')
-        address_2 = self.instrument_addresses.get('gas2')
-        
-        # Skip if no addresses are set
-        if address_1 is None and address_2 is None:
-            return
-            
-        # Update readings for each valid address
-        for addr in [address_1, address_2]:
-            if addr is not None and addr in self.reading_labels:
+        # Update readings for all connected instruments
+        for addr in self.controller.instruments.keys():
+            if addr in self.reading_labels:
                 try:
                     # Get readings from controller
                     readings = self.controller.get_readings(addr)
-                    
-                    # Remove debug output to clean up the command window
-                    # self.print_to_command_output(f"Debug - Readings for addr {addr}: {readings}")
                     
                     # Update each parameter label
                     for param in ['Flow', 'Valve', 'Temperature']:
@@ -779,13 +839,13 @@ class MainWindow(tk.Frame):
                             
                             # Format value based on parameter type
                             if param == 'Flow':
-                                formatted = f"{value:.3f}"
+                                formatted = f"{value:.3f}" if value is not None else "---"
                             elif param == 'Valve':
-                                formatted = f"{value:.1f}"
+                                formatted = f"{value:.1f}" if value is not None else "---"
                             elif param == 'Temperature':
-                                formatted = f"{value:.1f}"
+                                formatted = f"{value:.1f}" if value is not None else "---"
                             else:
-                                formatted = str(value)
+                                formatted = str(value) if value is not None else "---"
                                 
                             self.reading_labels[addr][param].config(text=formatted)
                     

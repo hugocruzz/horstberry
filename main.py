@@ -24,12 +24,16 @@ def main():
     root.tk.call('tk', 'scaling', settings.get('scaling', 1.0))
     
     connection_settings = platform_interface.get_connection_settings()
+    
+    # Initialize FlowController with default port from settings (COM13)
+    default_port = connection_settings.get('port', 'COM13')
     flow_controller = FlowController(
-        port=connection_settings['port'],
-        addresses=None  # Start with no addresses - will scan later
+        port=default_port,  # Use default port from settings
+        addresses=None  # Don't initialize with addresses until scan
     )
     
-    # Store default addresses in settings just for reference
+    # Store connection settings for reference
+    settings['port'] = default_port
     settings['default_addresses'] = connection_settings.get('addresses', [None, None])
     
     app = MainWindow(root, flow_controller, settings)

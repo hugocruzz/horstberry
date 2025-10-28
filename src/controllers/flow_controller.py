@@ -4,8 +4,16 @@ import time
 
 from src.models.calculations import calculate_flows_variable
 
+KNOWN_FLOW_RANGES = {
+    8: (0.13604, 10, "mln/min"),
+    3: (0.012023, 1.5, "ln/min"),
+    5: (1.233, 150, "mln/min"),
+    10: (0.012023, 1.5, "ln/min"),
+    20: (0.012023, 1.5, "ln/min"),
+}
+
 class FlowController:
-    def __init__(self, port: str, addresses: list = None):
+    def __init__(self, port: str = None, addresses: list = None):
         self.port = port
         self.instruments = {}
         self.connected = False
@@ -13,10 +21,24 @@ class FlowController:
         self.setpoints = {}  # Track setpoints - will be populated when addresses are known
         self.units = {}       # Dictionnaire pour stocker l'unité de chaque instrument
         self.max_flows = {}   # Dictionnaire pour stocker le débit max de chaque instrument
-        # ...existing code...
-        # Only initialize with provided addresses
-        if addresses and isinstance(addresses, list) and addresses[0] is not None:
+        
+        # Only initialize with provided addresses if port is also known
+        if port and addresses and isinstance(addresses, list) and addresses[0] is not None:
             self.initialize_instruments(port, addresses)
+
+    def get_port(self) -> Optional[str]:
+        """Gets the current COM port."""
+        return self.port
+
+    def set_port(self, port: str):
+        """Sets the COM port for the connection. If the port changes, it resets the connection."""
+        if self.port != port:
+            self.port = port
+            self.connected = False
+            self.instruments = {}
+            print(f"Flow controller port set to {self.port}. Connection reset.")
+        else:
+            self.port = port
 
     def initialize_instruments(self, port: str, addresses: list) -> None:
         """Initialize connections to instruments with known addresses"""
@@ -42,7 +64,11 @@ class FlowController:
         """Scan for instruments on the bus and return list of found addresses"""
         found_instruments = []
         
-        print(f"Scanning for instruments from address {start_addr} to {end_addr}...")
+        if not self.port:
+            print("Error: COM port not set. Cannot scan for instruments.")
+            return []
+
+        print(f"Scanning for instruments from address {start_addr} to {end_addr} on port {self.port}...")
         
         for addr in range(start_addr, end_addr + 1):
             try:
@@ -61,6 +87,36 @@ class FlowController:
                 self.instruments[addr] = temp_instrument
                 self.setpoints[addr] = 0.0
                 
+                # Read and store the unit for this instrument
+                try:
+                    self.units[addr] = temp_instrument.readParameter(129).strip()
+                    if self.units[addr] == "mln/min":
+                        self.units[addr] = "ml/min"
+                except Exception as e:
+                    print(f"Could not read unit for instrument {addr}: {e}")
+                    # Fallback to known unit if available
+                    if addr in KNOWN_FLOW_RANGES:
+                        _, _, self.units[addr] = KNOWN_FLOW_RANGES[addr]
+                    else:
+                        self.units[addr] = "ln/min"
+                
+                # Set max flow from KNOWN_FLOW_RANGES (more reliable than reading from device)
+                if addr in KNOWN_FLOW_RANGES:
+                    _, self.max_flows[addr], _ = KNOWN_FLOW_RANGES[addr]
+                    print(f"Set max flow for address {addr}: {self.max_flows[addr]} {self.units[addr]}")
+                else:
+                    # Try to read max flow from instrument if not in known ranges
+                    try:
+                        # Parameter 21 typically contains the max flow capacity
+                        max_flow_reading = temp_instrument.readParameter(21)
+                        if max_flow_reading and max_flow_reading > 0:
+                            self.max_flows[addr] = max_flow_reading
+                        else:
+                            self.max_flows[addr] = 1.5  # Default fallback
+                    except:
+                        self.max_flows[addr] = 1.5  # Default fallback
+                    print(f"Set max flow for address {addr}: {self.max_flows[addr]} {self.units[addr]} (not in known ranges)")
+
                 # Small delay to prevent bus overload
                 time.sleep(0.1)
             except Exception as e:
@@ -80,8 +136,8 @@ class FlowController:
 
     def set_flow(self, address: int, flow: float) -> bool:
         """Set flow for a specific instrument"""
-        try:
-            max_flow = self.max_flows.get(address, 1.5)  # Default to 1.5 if not set
+        try: 
+            max_flow = self.max_flows.get(address, 1.5) # Default to 1.5 if not set
             percentage = (flow / max_flow) * 100
             value = int((percentage / 100.0) * 32000)
             self.instruments[address].writeParameter(9, value)
@@ -94,6 +150,37 @@ class FlowController:
         except Exception as e:
             print(f"Error setting flow: {e}")
             return False
+
+    def get_instrument_metadata(self, address: int = None) -> Dict[str, Any]:
+        """Returns stored metadata for an instrument or all instruments.
+        
+        Args:
+            address: If provided, returns metadata for that specific instrument.
+                    If None, returns metadata for all instruments.
+        
+        Returns:
+            If address is provided: {'unit': str, 'max_flow': float, 'min_flow': float}
+            If address is None: {address: {'unit': str, 'max_flow': float, 'min_flow': float}, ...}
+        """
+        if address is not None:
+            # Get min_flow from KNOWN_FLOW_RANGES if available
+            min_flow, max_flow_range, _ = KNOWN_FLOW_RANGES.get(address, (0.0, None, None))
+            return {
+                'unit': self.units.get(address, 'N/A'),
+                'max_flow': self.max_flows.get(address, 0.0),
+                'min_flow': min_flow
+            }
+        else:
+            # Return metadata for all instruments
+            all_metadata = {}
+            for addr in self.instruments.keys():
+                min_flow, max_flow_range, _ = KNOWN_FLOW_RANGES.get(addr, (0.0, None, None))
+                all_metadata[addr] = {
+                    'unit': self.units.get(addr, 'N/A'),
+                    'max_flow': self.max_flows.get(addr, 0.0),
+                    'min_flow': min_flow
+                }
+            return all_metadata
 
     def get_setpoint(self, address: int) -> float:
         """Get the stored setpoint for a specific instrument"""
@@ -125,18 +212,18 @@ class FlowController:
     def get_readings(self, address: int) -> Dict[str, Any]:
         """Get all readings from an instrument, including the unit"""
         try:
-            unit = self.read_unit(address)
+            # Use cached unit instead of reading it every time
+            unit = self.units.get(address, "ln/min")
+            
             readings = {
                 'Flow': self.read_flow(address),
                 'Valve': self.read_valve(address),
                 'Temperature': self.read_temperature(address),
                 'Unit': unit
             }
-
-            print(f"Debug - Readings for {address}: {readings}, Max Flow: {self.max_flows[address]}")  # Debug print
             return readings
         except Exception as e:
-            print(f"Error getting readings: {e}")
+            print(f"Error getting readings from address {address}: {e}")
             return {'Flow': None, 'Valve': None, 'Temperature': None, 'Unit': "ln/min"}
             
     def is_connected(self) -> bool:
@@ -171,12 +258,30 @@ class FlowController:
             return None
             
     def read_unit(self, address: int) -> str:
-        """Read flow unit"""
+        """Read flow unit from cache (faster) or from instrument if not cached"""
+        # First try to get from cache
+        if address in self.units:
+            return self.units[address]
+        
+        # If not cached, read from instrument and cache it
         try:
-            unit = self.instruments[address].readParameter(129).strip()  # Trim whitespace
+            unit = self.instruments[address].readParameter(129).strip()
             if unit == "mln/min":
                 unit = "ml/min"  # Normalize unit
+            self.units[address] = unit  # Cache it
             return unit
         except:
             return "ln/min"
+
+    def start_all(self):
+        """Set flow to the stored setpoint for all instruments."""
+        for addr, setpoint in self.setpoints.items():
+            self.set_flow(addr, setpoint)
+            time.sleep(0.1) # Small delay between commands
+
+    def stop_all(self):
+        """Set flow to 0 for all instruments."""
+        for addr in self.instruments.keys():
+            self.set_flow(addr, 0)
+            time.sleep(0.1) # Small delay between commands
 
