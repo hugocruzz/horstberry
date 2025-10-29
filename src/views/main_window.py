@@ -18,6 +18,18 @@ KNOWN_FLOW_RANGES = {
     20: (0.012023, 1.5, "ln/min"),
 }
 
+# Instrument naming and display order configuration
+INSTRUMENT_NAMES = {
+    20: "Base gas (air)",
+    3: "High flow",
+    5: "Medium flow",
+    8: "Low flow",
+    10: "Helium"
+}
+
+# Display order from top to bottom
+INSTRUMENT_DISPLAY_ORDER = [20, 3, 5, 8, 10]
+
 class MainWindow(tk.Frame):
     def __init__(self, parent: tk.Tk, controller: Any, settings: Dict[str, Any]):
         super().__init__(parent)
@@ -60,10 +72,12 @@ class MainWindow(tk.Frame):
         # Flag to track if instrument scanning has been completed
         self.instruments_scanned = False
         
-        # Initialize instrument addresses with None to prevent premature readings
+        # Initialize instrument addresses
+        # Gas1 is always Base gas (air) at address 20
+        # Gas2 is the variable gas, assigned after scanning
         self.instrument_addresses = {
-            'gas1': None,
-            'gas2': None
+            'gas1': 20,  # Base gas (air) - fixed
+            'gas2': None  # Variable gas - assigned during scan
         }
         
         # Configure fonts based on platform settings
@@ -199,23 +213,19 @@ class MainWindow(tk.Frame):
         
         row = 0
         
-        # Gas 1 (low concentration) instrument selection
-        ttk.Label(self.concentration_frame, text="Gas 1 Address:").grid(
+        # Base gas (air) - always address 20
+        ttk.Label(self.concentration_frame, text="Base gas (air):").grid(
             row=row, column=0, padx=5, pady=5, sticky="w")
-        self.gas1_address_var = tk.StringVar(value="Not assigned")
-        self.gas1_dropdown = ttk.Combobox(
-            self.concentration_frame,
-            textvariable=self.gas1_address_var,
-            values=["Not assigned"],
-            state="readonly",
-            width=12
-        )
-        self.gas1_dropdown.grid(row=row, column=1, padx=5, pady=5, sticky="e")
-        self.gas1_dropdown.bind("<<ComboboxSelected>>", self.on_gas1_selected)
+        self.gas1_address_var = tk.StringVar(value="20")
+        ttk.Label(self.concentration_frame, text="Address 20", 
+                 foreground='blue', font=('Helvetica', 12, 'bold')).grid(
+            row=row, column=1, padx=5, pady=5, sticky="e")
+        # Gas1 is always address 20
+        self.instrument_addresses['gas1'] = 20
         row += 1
         
-        # Gas 2 (high concentration) instrument selection
-        ttk.Label(self.concentration_frame, text="Gas 2 Address:").grid(
+        # Gas 2 (variable concentration) instrument selection
+        ttk.Label(self.concentration_frame, text="Variable gas:").grid(
             row=row, column=0, padx=5, pady=5, sticky="w")
         self.gas2_address_var = tk.StringVar(value="Not assigned")
         self.gas2_dropdown = ttk.Combobox(
@@ -234,9 +244,16 @@ class MainWindow(tk.Frame):
             row=row, column=0, columnspan=2, sticky='ew', pady=10)
         row += 1
         
+        # Concentration parameters with descriptive labels
+        concentration_labels = {
+            'C_tot_ppm': 'Outflow desired\nconcentration (ppm)',
+            'C1_ppm': 'Base gas\nconcentration (ppm)',
+            'C2_ppm': 'Gas concentration (ppm)'
+        }
+        
         for key in ['C_tot_ppm', 'C1_ppm', 'C2_ppm']:
-            ttk.Label(self.concentration_frame, text=f"{key}:").grid(
-                row=row, column=0, padx=5, pady=5, sticky="w")
+            label = ttk.Label(self.concentration_frame, text=concentration_labels[key], justify=tk.LEFT)
+            label.grid(row=row, column=0, padx=5, pady=5, sticky="w")
             ttk.Entry(self.concentration_frame, 
                     textvariable=self.variables[key], width=10).grid(
                 row=row, column=1, padx=5, pady=5, sticky="e")
@@ -256,27 +273,20 @@ class MainWindow(tk.Frame):
             row=row, column=0, columnspan=2, pady=10)
 
     def on_gas1_selected(self, event):
-        """Handle Gas 1 instrument selection."""
-        selected = self.gas1_address_var.get()
-        if selected != "Not assigned":
-            try:
-                addr = int(selected)
-                self.instrument_addresses['gas1'] = addr
-                self.print_to_command_output(f"Gas 1 (low conc.) assigned to address {addr}")
-                self.update_status(f"Gas 1 assigned to address {addr}", "green")
-            except ValueError:
-                pass
+        """Gas1 is always address 20 (Base gas), so this is not used anymore."""
+        pass
     
     def on_gas2_selected(self, event):
-        """Handle Gas 2 instrument selection."""
+        """Handle Gas 2 (variable gas) instrument selection."""
         selected = self.gas2_address_var.get()
         if selected != "Not assigned":
             try:
-                addr = int(selected)
+                addr = int(selected.split()[0])  # Extract just the number from "3 (High flow)"
                 self.instrument_addresses['gas2'] = addr
-                self.print_to_command_output(f"Gas 2 (high conc.) assigned to address {addr}")
-                self.update_status(f"Gas 2 assigned to address {addr}", "green")
-            except ValueError:
+                instrument_name = INSTRUMENT_NAMES.get(addr, f"Address {addr}")
+                self.print_to_command_output(f"Variable gas assigned to {instrument_name} (address {addr})")
+                self.update_status(f"Variable gas: {instrument_name}", "green")
+            except (ValueError, IndexError):
                 pass
 
     def on_com_port_selected(self, event):
@@ -317,25 +327,34 @@ class MainWindow(tk.Frame):
         instruments_metadata = self.controller.get_instrument_metadata()
         self.print_to_command_output(f"Connected to {len(instruments_metadata)} instruments at addresses: {list(instruments_metadata.keys())}")
         
-        # Update Gas1 and Gas2 dropdowns with available addresses
-        address_list = [str(addr) for addr in sorted(instruments_metadata.keys())]
-        self.gas1_dropdown['values'] = address_list
-        self.gas2_dropdown['values'] = address_list
+        # Update Gas2 dropdown with available addresses (excluding base gas at 20)
+        # Format: "address (name)"
+        address_options = []
+        for addr in sorted(instruments_metadata.keys()):
+            if addr != 20:  # Exclude base gas from variable gas selection
+                name = INSTRUMENT_NAMES.get(addr, f"Unknown")
+                address_options.append(f"{addr} ({name})")
         
-        # Auto-assign first two instruments if available
-        if len(address_list) >= 2:
-            self.gas1_address_var.set(address_list[0])
-            self.gas2_address_var.set(address_list[1])
-            self.instrument_addresses['gas1'] = int(address_list[0])
-            self.instrument_addresses['gas2'] = int(address_list[1])
-            self.print_to_command_output(f"Auto-assigned: Gas1={address_list[0]}, Gas2={address_list[1]}")
-        elif len(address_list) == 1:
-            self.gas1_address_var.set(address_list[0])
-            self.instrument_addresses['gas1'] = int(address_list[0])
-            self.print_to_command_output(f"Auto-assigned: Gas1={address_list[0]}")
+        self.gas2_dropdown['values'] = address_options if address_options else ["Not assigned"]
         
-        for addr, metadata in instruments_metadata.items():
-            self.setup_instrument_controls(self.scrollable_frame, addr, metadata)
+        # Auto-assign first available instrument (other than 20) to gas2
+        if address_options:
+            self.gas2_address_var.set(address_options[0])
+            first_addr = int(address_options[0].split()[0])
+            self.instrument_addresses['gas2'] = first_addr
+            self.print_to_command_output(f"Auto-assigned variable gas to {INSTRUMENT_NAMES.get(first_addr, '')} (address {first_addr})")
+        
+        # Display instruments in the specified order
+        for addr in INSTRUMENT_DISPLAY_ORDER:
+            if addr in instruments_metadata:
+                metadata = instruments_metadata[addr]
+                self.setup_instrument_controls(self.scrollable_frame, addr, metadata)
+        
+        # Display any additional instruments not in the predefined order
+        for addr in sorted(instruments_metadata.keys()):
+            if addr not in INSTRUMENT_DISPLAY_ORDER:
+                metadata = instruments_metadata[addr]
+                self.setup_instrument_controls(self.scrollable_frame, addr, metadata)
             
         self.update_status(f"Scan complete. Found {len(instruments_metadata)} instruments.", "green")
         self.instruments_scanned = True
@@ -383,10 +402,13 @@ class MainWindow(tk.Frame):
         if metadata is None:
             metadata = self.controller.get_instrument_metadata(addr)
         
+        # Get instrument name from configuration
+        instrument_name = INSTRUMENT_NAMES.get(addr, "Unknown")
+        
         # Create a labeled frame for this instrument
         instrument_frame = ttk.LabelFrame(
             parent, 
-            text=f"Instrument Address {addr}",
+            text=f"{instrument_name} (Address {addr})",
             padding="10"
         )
         instrument_frame.pack(fill=tk.X, expand=True, pady=5)
@@ -516,13 +538,13 @@ class MainWindow(tk.Frame):
                 self.print_to_command_output(f"Locally calculated flows: Q1={Q1:.3f}, Q2={Q2:.3f}")
             
             # Map to instrument addresses
-            addr1 = self.instrument_addresses.get('gas1')
-            addr2 = self.instrument_addresses.get('gas2')
+            addr1 = self.instrument_addresses.get('gas1')  # Base gas (air) - always 20
+            addr2 = self.instrument_addresses.get('gas2')  # Variable gas
             
             # Check if roles have been assigned
             if addr1 is None or addr2 is None:
-                self.update_status("Please assign instrument roles first (Gas1 and Gas2).", "orange")
-                self.print_to_command_output("Please assign instrument roles using 'Assign Roles' button.")
+                self.update_status("Please assign variable gas instrument.", "orange")
+                self.print_to_command_output("Please select a variable gas from the dropdown.")
                 return
             
             flows = {addr1: Q1, addr2: Q2}
@@ -547,7 +569,8 @@ class MainWindow(tk.Frame):
             # Display calculated flows with units
             flow_messages = []
             for addr, flow in flows.items():
-                # Get the unit from controller
+                # Get instrument name and unit
+                instrument_name = INSTRUMENT_NAMES.get(addr, f"Address {addr}")
                 unit = self.controller.read_unit(addr)
                 
                 # Convert flow value based on unit if needed
@@ -556,9 +579,9 @@ class MainWindow(tk.Frame):
                     # If unit is ml/min, convert from ln/min
                     if unit == "ml/min":
                         converted_flow = flow * 1000  # Convert ln/min to ml/min
-                    flow_messages.append(f"Q{addr}={converted_flow:.3f} {unit}")
+                    flow_messages.append(f"{instrument_name}: {converted_flow:.3f} {unit}")
                 else:
-                    flow_messages.append(f"Q{addr}={str(flow)} {unit}")
+                    flow_messages.append(f"{instrument_name}: {str(flow)} {unit}")
 
             result_msg = "Calculated: " + ", ".join(flow_messages)
             self.print_to_command_output(result_msg)
