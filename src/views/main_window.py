@@ -683,7 +683,7 @@ class MainWindow(tk.Frame):
         """Open the calibration routine window"""
         try:
             calibration_win = CalibrationWindow(self.parent, self.controller)
-            calibration_win.grab_set()  # Make it modal
+            # Don't use grab_set() to allow navigation in main window
         except Exception as e:
             self.print_to_command_output(f"Error opening calibration window: {e}", 'error')
 
@@ -700,6 +700,11 @@ class MainWindow(tk.Frame):
 
         instruments_metadata = self.controller.get_instrument_metadata()
         self.print_to_command_output(f"Connected to {len(instruments_metadata)} instruments at addresses: {list(instruments_metadata.keys())}", 'success')
+        
+        # Auto-assign base gas (address 20) to gas1 if found
+        if 20 in instruments_metadata:
+            self.instrument_addresses['gas1'] = 20
+            self.print_to_command_output(f"Base gas (air) auto-assigned to address 20", 'info')
         
         # Update Gas2 dropdown with available addresses (excluding base gas at 20)
         # Format: "address (name)"

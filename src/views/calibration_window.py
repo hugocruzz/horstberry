@@ -16,7 +16,7 @@ class CalibrationWindow(tk.Toplevel):
         self.controller = controller
         self.parent_window = parent
         self.title("Concentration Calibration Routine Mode")
-        self.geometry("900x700")
+        self.geometry("1100x750")  # Bigger window
         self.resizable(True, True)
         
         # Settings file path
@@ -122,25 +122,29 @@ class CalibrationWindow(tk.Toplevel):
         # Gas address configuration
         ttk.Label(left_frame, text="Gas Address Configuration:", 
                  font=('Segoe UI', 10, 'bold')).grid(row=row, column=0, columnspan=2, 
-                                                     sticky=tk.W, pady=(0, 10))
+                                                     sticky=tk.W, pady=(0, 5))
         row += 1
         
+        # Create a compact grid for gas addresses
+        addr_grid_frame = ttk.Frame(left_frame)
+        addr_grid_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
         addr_configs = [
-            ("Neutral Gas (Air):", self.addr_neutral, "Default: 20"),
-            ("Mix Gas - High Flow:", self.addr_mix_high, "Default: 3"),
-            ("Mix Gas - Medium Flow:", self.addr_mix_med, "Default: 5"),
-            ("Mix Gas - Low Flow:", self.addr_mix_low, "Default: 8"),
-            ("Helium:", self.addr_helium, "Default: 10")
+            ("Neutral (Air):", self.addr_neutral, 20),
+            ("Mix-High:", self.addr_mix_high, 3),
+            ("Mix-Med:", self.addr_mix_med, 5),
+            ("Mix-Low:", self.addr_mix_low, 8),
+            ("Helium:", self.addr_helium, 10)
         ]
         
-        for label_text, var, default_text in addr_configs:
-            addr_frame = ttk.Frame(left_frame)
-            addr_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=2)
-            ttk.Label(addr_frame, text=label_text, font=('Segoe UI', 9)).pack(side=tk.LEFT)
-            ttk.Spinbox(addr_frame, textvariable=var, from_=1, to=24, width=5).pack(side=tk.LEFT, padx=5)
-            ttk.Label(addr_frame, text=default_text, font=('Segoe UI', 8, 'italic'), 
-                     foreground='#7F8C8D').pack(side=tk.LEFT, padx=5)
-            row += 1
+        for i, (label_text, var, default) in enumerate(addr_configs):
+            ttk.Label(addr_grid_frame, text=label_text, font=('Segoe UI', 9)).grid(
+                row=i, column=0, sticky=tk.W, padx=(0, 5), pady=1)
+            ttk.Spinbox(addr_grid_frame, textvariable=var, from_=1, to=24, width=4).grid(
+                row=i, column=1, sticky=tk.W, pady=1)
+            ttk.Label(addr_grid_frame, text=f"(def: {default})", 
+                     font=('Segoe UI', 8, 'italic'), foreground='#7F8C8D').grid(
+                row=i, column=2, sticky=tk.W, padx=(3, 0), pady=1)
         
         row += 1
         
@@ -499,61 +503,75 @@ class CalibrationWindow(tk.Toplevel):
                 try:
                     # Special handling for 0 ppm - use only neutral gas
                     if target_conc <= 0.1:  # Near zero concentration
-                        Q1 = total_flow  # All neutral gas (air)
-                        Q2 = 0  # No variable gas (methane)
-                        addr_base = self.addr_neutral.get()
-                        addr_variable = None
+                        Q_air = total_flow  # All neutral gas (air)
+                        Q_methane = 0  # No variable gas (methane)
+                        addr_neutral = self.addr_neutral.get()
+                        addr_mix = None
                         
                         # Set only neutral gas flow
-                        self.controller.set_flow(addr_base, Q1)
+                        self.controller.set_flow(addr_neutral, Q_air)
                         # Stop all mix gas instruments
                         for addr in [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]:
                             self.controller.set_flow(addr, 0)
                         
+                        # Store for data logging
+                        addr_base = addr_neutral
+                        addr_variable = None
+                        Q1 = Q_air
+                        Q2 = 0
+                        
                         if hasattr(self.parent_window, 'print_to_command_output'):
                             self.parent_window.print_to_command_output(
-                                f"  Flows set: Neutral Gas (addr {addr_base})={Q1:.3f} L/min, Mix Gas=0 L/min", 'info'
+                                f"  Flows set: Air (addr {addr_neutral})={Q_air:.3f} L/min, Methane=0 L/min", 'info'
                             )
                     else:
                         # Normal calculation for non-zero concentrations
                         from ..models.calculations import calculate_flows_variable
                         
-                        Q1, Q2 = calculate_flows_variable(
+                        # Q1 is for C1 (input gas = methane at 5000ppm)
+                        # Q2 is for C2 (air = 0ppm)
+                        Q_methane, Q_air = calculate_flows_variable(
                             target_conc,
-                            input_conc,
-                            0,  # C2 is 0 for dilution with air
+                            input_conc,  # C1 = methane concentration
+                            0,  # C2 = air (0 ppm)
                             total_flow
                         )
                         
-                        # Get base gas address
-                        addr_base = self.addr_neutral.get()
+                        # Get neutral gas (air) address
+                        addr_neutral = self.addr_neutral.get()
                         
-                        # Use automatic selection for variable gas from configured addresses
+                        # Use automatic selection for mix gas (methane) from configured addresses
                         available_addrs = [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]
                         if hasattr(self.parent_window, 'select_best_instrument_for_flow'):
-                            addr_variable = self.parent_window.select_best_instrument_for_flow(Q2)
-                            if addr_variable is None or addr_variable not in available_addrs:
+                            addr_mix = self.parent_window.select_best_instrument_for_flow(Q_methane)
+                            if addr_mix is None or addr_mix not in available_addrs:
                                 if hasattr(self.parent_window, 'print_to_command_output'):
                                     self.parent_window.print_to_command_output(
-                                        f"Warning: No suitable instrument for {Q2:.3f} L/min, skipping step", 'warning'
+                                        f"Warning: No suitable instrument for {Q_methane:.3f} L/min, skipping step", 'warning'
                                     )
                                 continue
                         else:
                             # Fallback to high flow if selection method not available
-                            addr_variable = self.addr_mix_high.get()
+                            addr_mix = self.addr_mix_high.get()
                         
-                        # Set flows
-                        self.controller.set_flow(addr_base, Q1)
-                        self.controller.set_flow(addr_variable, Q2)
+                        # Set flows: neutral gas (air) and mix gas (methane)
+                        self.controller.set_flow(addr_neutral, Q_air)
+                        self.controller.set_flow(addr_mix, Q_methane)
                         
                         # Stop other mix gas instruments
                         for addr in available_addrs:
-                            if addr != addr_variable:
+                            if addr != addr_mix:
                                 self.controller.set_flow(addr, 0)
+                        
+                        # Store for data logging
+                        addr_base = addr_neutral
+                        addr_variable = addr_mix
+                        Q1 = Q_air  # Neutral gas flow
+                        Q2 = Q_methane  # Mix gas flow
                         
                         if hasattr(self.parent_window, 'print_to_command_output'):
                             self.parent_window.print_to_command_output(
-                                f"  Flows set: Neutral Gas={Q1:.3f} L/min, Mix Gas (addr {addr_variable})={Q2:.3f} L/min", 'info'
+                                f"  Flows set: Air (addr {addr_neutral})={Q_air:.3f} L/min, Methane (addr {addr_mix})={Q_methane:.3f} L/min", 'info'
                             )
                     
                     # Wait for stabilization and log data
