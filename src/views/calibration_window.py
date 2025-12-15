@@ -50,6 +50,13 @@ class CalibrationWindow(tk.Toplevel):
         self.current_step = 0
         self.calibration_thread = None
         
+        # Gas address configuration
+        self.addr_neutral = tk.IntVar(value=saved_settings.get('addr_neutral', 20))  # Default: air at 20
+        self.addr_mix_high = tk.IntVar(value=saved_settings.get('addr_mix_high', 3))  # Default: high flow at 3
+        self.addr_mix_med = tk.IntVar(value=saved_settings.get('addr_mix_med', 5))  # Default: medium flow at 5
+        self.addr_mix_low = tk.IntVar(value=saved_settings.get('addr_mix_low', 8))  # Default: low flow at 8
+        self.addr_helium = tk.IntVar(value=saved_settings.get('addr_helium', 10))  # Default: helium at 10
+        
         self.setup_gui()
         self.update_step_preview()
         
@@ -112,6 +119,36 @@ class CalibrationWindow(tk.Toplevel):
             row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
         row += 1
         
+        # Gas address configuration
+        ttk.Label(left_frame, text="Gas Address Configuration:", 
+                 font=('Segoe UI', 10, 'bold')).grid(row=row, column=0, columnspan=2, 
+                                                     sticky=tk.W, pady=(0, 10))
+        row += 1
+        
+        addr_configs = [
+            ("Neutral Gas (Air):", self.addr_neutral, "Default: 20"),
+            ("Mix Gas - High Flow:", self.addr_mix_high, "Default: 3"),
+            ("Mix Gas - Medium Flow:", self.addr_mix_med, "Default: 5"),
+            ("Mix Gas - Low Flow:", self.addr_mix_low, "Default: 8"),
+            ("Helium:", self.addr_helium, "Default: 10")
+        ]
+        
+        for label_text, var, default_text in addr_configs:
+            addr_frame = ttk.Frame(left_frame)
+            addr_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=2)
+            ttk.Label(addr_frame, text=label_text, font=('Segoe UI', 9)).pack(side=tk.LEFT)
+            ttk.Spinbox(addr_frame, textvariable=var, from_=1, to=24, width=5).pack(side=tk.LEFT, padx=5)
+            ttk.Label(addr_frame, text=default_text, font=('Segoe UI', 8, 'italic'), 
+                     foreground='#7F8C8D').pack(side=tk.LEFT, padx=5)
+            row += 1
+        
+        row += 1
+        
+        # Separator
+        ttk.Separator(left_frame, orient='horizontal').grid(
+            row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
+        row += 1
+        
         # Step configuration header
         ttk.Label(left_frame, text="Step Configuration:", 
                  font=('Segoe UI', 10, 'bold')).grid(row=row, column=0, columnspan=2, 
@@ -138,6 +175,9 @@ class CalibrationWindow(tk.Toplevel):
         self.manual_button = ttk.Button(mode_frame, text="Enter Steps Manually", 
                                        command=self.open_manual_entry, state='disabled')
         self.manual_button.grid(row=0, column=1, padx=(10, 0))
+        # Force button to use normal foreground color even when disabled
+        self.style = ttk.Style()
+        self.style.map('TButton', foreground=[('disabled', '#000000')])
         
         # Automatic mode
         ttk.Radiobutton(mode_frame, text="Automatic Computation", 
@@ -174,11 +214,14 @@ class CalibrationWindow(tk.Toplevel):
                                                               sticky=tk.W, pady=(10, 0))
         row += 1
         
-        # Update button
-        ttk.Button(left_frame, text="Update Step Preview", 
+        # Update button (recalculates steps based on current configuration)
+        ttk.Button(left_frame, text="🔄 Update Step Preview", 
                   command=self.update_step_preview).grid(row=row, column=0, columnspan=2, 
                                                          pady=(20, 10))
-        row += 1
+        ttk.Label(left_frame, text="(Recalculates steps based on current settings)", 
+                 font=('Segoe UI', 8, 'italic'), foreground='#7F8C8D').grid(
+                     row=row+1, column=0, columnspan=2, pady=(0, 10))
+        row += 2
         
         # === RIGHT PANEL: Step Preview ===
         right_frame = ttk.LabelFrame(main_frame, text="Step Preview", padding="15")
@@ -212,17 +255,35 @@ class CalibrationWindow(tk.Toplevel):
                                        foreground='#2E86AB')
         self.summary_label.grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
         
+        # Progress bar
+        self.progress_label = ttk.Label(right_frame, text="Progress: 0%", 
+                                       font=('Segoe UI', 9, 'bold'))
+        self.progress_label.grid(row=3, column=0, sticky=tk.W, pady=(10, 5))
+        
+        self.progress_bar = ttk.Progressbar(right_frame, mode='determinate', 
+                                           length=300, maximum=100)
+        self.progress_bar.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.progress_bar['value'] = 0
+        
         # === BOTTOM: Action Buttons ===
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=1, column=0, columnspan=2, pady=(20, 0))
         
-        ttk.Button(button_frame, text="Start Calibration Routine", 
+        self.start_button = ttk.Button(button_frame, text="Start Calibration Routine", 
                   command=self.start_routine,
-                  style='Accent.TButton').pack(side=tk.LEFT, padx=5)
+                  style='Accent.TButton')
+        self.start_button.pack(side=tk.LEFT, padx=5)
+        
+        self.stop_button = ttk.Button(button_frame, text="Stop Calibration", 
+                  command=self.stop_routine,
+                  style='Warning.TButton',
+                  state='disabled')
+        self.stop_button.pack(side=tk.LEFT, padx=5)
+        
         ttk.Button(button_frame, text="Export Configuration", 
                   command=self.export_config).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Close", 
-                  command=self.destroy).pack(side=tk.LEFT, padx=5)
+                  command=self.on_close).pack(side=tk.LEFT, padx=5)
         
         # Bind variables to auto-update
         self.initial_conc_var.trace('w', lambda *args: self.update_step_preview())
@@ -365,6 +426,12 @@ class CalibrationWindow(tk.Toplevel):
             # Save settings before starting
             self.save_settings()
             
+            # Reset and update UI
+            self.progress_bar['value'] = 0
+            self.progress_label.config(text="Progress: 0%")
+            self.start_button.config(state='disabled')
+            self.stop_button.config(state='normal')
+            
             # Start calibration in separate thread
             self.is_running = True
             self.calibration_thread = Thread(target=self._run_calibration, 
@@ -380,7 +447,26 @@ class CalibrationWindow(tk.Toplevel):
                 # Set calibration mode flag
                 self.parent_window.in_calibration_mode = True
                 self.parent_window.calibration_status_var.set("CALIBRATION MODE ACTIVE")
-            
+    
+    def stop_routine(self):
+        """Stop the calibration routine"""
+        if self.is_running:
+            response = messagebox.askyesno(
+                "Stop Calibration",
+                "Are you sure you want to stop the calibration routine?",
+                icon='warning'
+            )
+            if response:
+                self.is_running = False
+                self.start_button.config(state='normal')
+                self.stop_button.config(state='disabled')
+                if hasattr(self.parent_window, 'print_to_command_output'):
+                    self.parent_window.print_to_command_output(
+                        "Calibration routine stopped by user", 'warning'
+                    )
+                    self.parent_window.in_calibration_mode = False
+                    self.parent_window.calibration_status_var.set("")
+    
     def _run_calibration(self, input_conc: float, total_flow: float, step_duration: float):
         """Run the calibration routine in a separate thread"""
         try:
@@ -399,55 +485,85 @@ class CalibrationWindow(tk.Toplevel):
                 
                 self.current_step = step_num
                 
+                # Update progress bar
+                progress = (step_num / len(self.computed_steps)) * 100
+                self.after(0, lambda p=progress, s=step_num: self._update_progress(p, s))
+                
                 # Update status in parent window
                 if hasattr(self.parent_window, 'print_to_command_output'):
                     self.parent_window.print_to_command_output(
                         f"Calibration Step {step_num}/{len(self.computed_steps)}: {target_conc:.2f} ppm", 'info'
                     )
                 
-                # Calculate required flows (using automatic instrument selection)
+                # Calculate required flows
                 try:
-                    # Calculate flows using the main window's logic
-                    from ..models.calculations import calculate_flows_variable
-                    
-                    Q1, Q2 = calculate_flows_variable(
-                        target_conc,
-                        input_conc,
-                        0,  # C2 is 0 for dilution with air
-                        total_flow
-                    )
-                    
-                    # Get base gas address (should be 20)
-                    addr_base = 20
-                    
-                    # Use automatic selection for variable gas
-                    if hasattr(self.parent_window, 'select_best_instrument_for_flow'):
-                        addr_variable = self.parent_window.select_best_instrument_for_flow(Q2)
-                        if addr_variable is None:
-                            if hasattr(self.parent_window, 'print_to_command_output'):
-                                self.parent_window.print_to_command_output(
-                                    f"Warning: No suitable instrument for {Q2:.3f} L/min, skipping step", 'warning'
-                                )
-                            continue
+                    # Special handling for 0 ppm - use only neutral gas
+                    if target_conc <= 0.1:  # Near zero concentration
+                        Q1 = total_flow  # All neutral gas (air)
+                        Q2 = 0  # No variable gas (methane)
+                        addr_base = self.addr_neutral.get()
+                        addr_variable = None
+                        
+                        # Set only neutral gas flow
+                        self.controller.set_flow(addr_base, Q1)
+                        # Stop all mix gas instruments
+                        for addr in [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]:
+                            self.controller.set_flow(addr, 0)
+                        
+                        if hasattr(self.parent_window, 'print_to_command_output'):
+                            self.parent_window.print_to_command_output(
+                                f"  Flows set: Neutral Gas (addr {addr_base})={Q1:.3f} L/min, Mix Gas=0 L/min", 'info'
+                            )
                     else:
-                        # Fallback to address 3 if selection method not available
-                        addr_variable = 3
-                    
-                    # Set flows
-                    self.controller.set_flow(addr_base, Q1)
-                    self.controller.set_flow(addr_variable, Q2)
-                    
-                    if hasattr(self.parent_window, 'print_to_command_output'):
-                        self.parent_window.print_to_command_output(
-                            f"  Flows set: Base={Q1:.3f} L/min, Variable (addr {addr_variable})={Q2:.3f} L/min", 'info'
+                        # Normal calculation for non-zero concentrations
+                        from ..models.calculations import calculate_flows_variable
+                        
+                        Q1, Q2 = calculate_flows_variable(
+                            target_conc,
+                            input_conc,
+                            0,  # C2 is 0 for dilution with air
+                            total_flow
                         )
+                        
+                        # Get base gas address
+                        addr_base = self.addr_neutral.get()
+                        
+                        # Use automatic selection for variable gas from configured addresses
+                        available_addrs = [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]
+                        if hasattr(self.parent_window, 'select_best_instrument_for_flow'):
+                            addr_variable = self.parent_window.select_best_instrument_for_flow(Q2)
+                            if addr_variable is None or addr_variable not in available_addrs:
+                                if hasattr(self.parent_window, 'print_to_command_output'):
+                                    self.parent_window.print_to_command_output(
+                                        f"Warning: No suitable instrument for {Q2:.3f} L/min, skipping step", 'warning'
+                                    )
+                                continue
+                        else:
+                            # Fallback to high flow if selection method not available
+                            addr_variable = self.addr_mix_high.get()
+                        
+                        # Set flows
+                        self.controller.set_flow(addr_base, Q1)
+                        self.controller.set_flow(addr_variable, Q2)
+                        
+                        # Stop other mix gas instruments
+                        for addr in available_addrs:
+                            if addr != addr_variable:
+                                self.controller.set_flow(addr, 0)
+                        
+                        if hasattr(self.parent_window, 'print_to_command_output'):
+                            self.parent_window.print_to_command_output(
+                                f"  Flows set: Neutral Gas={Q1:.3f} L/min, Mix Gas (addr {addr_variable})={Q2:.3f} L/min", 'info'
+                            )
                     
                     # Wait for stabilization and log data
                     time.sleep(duration_seconds)
                     
                     # Read actual values
                     actual_flow1 = self.controller.read_flow(addr_base) or 0
-                    actual_flow2 = self.controller.read_flow(addr_variable) or 0
+                    actual_flow2 = 0
+                    if addr_variable is not None:
+                        actual_flow2 = self.controller.read_flow(addr_variable) or 0
                     
                     # Calculate actual concentration
                     if (actual_flow1 + actual_flow2) > 0:
@@ -457,7 +573,7 @@ class CalibrationWindow(tk.Toplevel):
                     
                     # Log to file
                     with open(log_file, 'a') as f:
-                        f.write(f"{step_num},{target_conc:.2f},{actual_conc:.2f},{actual_flow1:.4f},{actual_flow2:.4f},{addr_variable},{datetime.now().isoformat()}\n")
+                        f.write(f"{step_num},{target_conc:.2f},{actual_conc:.2f},{actual_flow1:.4f},{actual_flow2:.4f},{addr_variable or 0},{datetime.now().isoformat()}\n")
                     
                 except Exception as e:
                     if hasattr(self.parent_window, 'print_to_command_output'):
@@ -467,6 +583,10 @@ class CalibrationWindow(tk.Toplevel):
             
             # Calibration complete
             self.is_running = False
+            self.after(0, lambda: self.start_button.config(state='normal'))
+            self.after(0, lambda: self.stop_button.config(state='disabled'))
+            self.after(0, lambda: self._update_progress(100, len(self.computed_steps)))
+            
             if hasattr(self.parent_window, 'print_to_command_output'):
                 self.parent_window.print_to_command_output(
                     f"Calibration routine completed. Data saved to: {log_file}", 'success'
@@ -496,6 +616,11 @@ class CalibrationWindow(tk.Toplevel):
             return duration * 3600
         return duration  # already in seconds
     
+    def _update_progress(self, progress: float, step: int):
+        """Update progress bar and label (must be called from main thread)"""
+        self.progress_bar['value'] = progress
+        self.progress_label.config(text=f"Progress: {progress:.0f}% (Step {step}/{len(self.computed_steps)})")
+    
     def load_settings(self) -> dict:
         """Load saved settings from file"""
         if os.path.exists(self.settings_file):
@@ -519,7 +644,12 @@ class CalibrationWindow(tk.Toplevel):
             'final_conc': self.final_conc_var.get(),
             'step_duration': self.step_duration_var.get(),
             'duration_unit': self.duration_unit_var.get(),
-            'back_forth': self.back_forth_var.get()
+            'back_forth': self.back_forth_var.get(),
+            'addr_neutral': self.addr_neutral.get(),
+            'addr_mix_high': self.addr_mix_high.get(),
+            'addr_mix_med': self.addr_mix_med.get(),
+            'addr_mix_low': self.addr_mix_low.get(),
+            'addr_helium': self.addr_helium.get()
         }
         try:
             with open(self.settings_file, 'w') as f:
