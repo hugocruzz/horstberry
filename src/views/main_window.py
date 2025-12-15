@@ -1044,15 +1044,25 @@ class MainWindow(tk.Frame):
             )
             return None
         
-        # Sort by max_flow (ascending) - we want the lowest range that can handle the flow for best accuracy
-        # Example: 10 ml/min → use low (0.01 L/min max), 11 ml/min → use medium (0.15 L/min max)
-        candidates.sort(key=lambda x: x['max_flow'])
+        # Select the best instrument by explicit priority: 8 (low) > 5 (medium) > 3 (high)
+        # This ensures we always use the smallest range for best accuracy
+        priority_order = [8, 5, 3]
+        best = None
         
-        # Select the best candidate (lowest max range)
-        best = candidates[0]
+        for priority_addr in priority_order:
+            for candidate in candidates:
+                if candidate['address'] == priority_addr:
+                    best = candidate
+                    break
+            if best:
+                break
+        
+        # Fallback: if none of the priority addresses matched, use the first candidate
+        if not best:
+            best = candidates[0]
         
         self.print_to_command_output(
-            f"[DEBUG]   Selected: {best['name']} (lowest suitable range, utilization: {best['utilization']:.1f}%)", 'success'
+            f"[DEBUG]   Selected: {best['name']} (addr {best['address']}, range: {best['min_flow']:.6f}-{best['max_flow']:.6f} L/min, utilization: {best['utilization']:.1f}%)", 'success'
         )
         self.print_to_command_output(
             f"Flow {required_flow:.3f} ln/min → {best['name']} "
