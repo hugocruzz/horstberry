@@ -16,7 +16,7 @@ class CalibrationWindow(tk.Toplevel):
         self.controller = controller
         self.parent_window = parent
         self.title("Concentration Calibration Routine Mode")
-        self.geometry("950x650")  # Compact window
+        self.geometry("1050x900")  # Default window size
         self.resizable(True, True)
         
         # Settings file path
@@ -227,6 +227,40 @@ class CalibrationWindow(tk.Toplevel):
                      row=row+1, column=0, columnspan=2, pady=(0, 5))
         row += 2
         
+        # Separator before action buttons
+        ttk.Separator(left_frame, orient='horizontal').grid(
+            row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
+        row += 1
+        
+        # === ACTION BUTTONS ===
+        ttk.Label(left_frame, text="Actions:", 
+                 font=('Segoe UI', 9, 'bold')).grid(row=row, column=0, columnspan=2, 
+                                                     sticky=tk.W, pady=(0, 5))
+        row += 1
+        
+        # Start/Stop buttons
+        button_row1 = ttk.Frame(left_frame)
+        button_row1.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        
+        self.start_button = ttk.Button(button_row1, text="▶ Start Calibration Routine", 
+                  command=self.start_routine)
+        self.start_button.pack(side=tk.LEFT, padx=(0, 5), fill=tk.X, expand=True)
+        
+        self.stop_button = ttk.Button(button_row1, text="⏹ Stop Calibration", 
+                  command=self.stop_routine,
+                  state='disabled')
+        self.stop_button.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        row += 1
+        
+        # Export and Close buttons
+        button_row2 = ttk.Frame(left_frame)
+        button_row2.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 0))
+        
+        ttk.Button(button_row2, text="📤 Export Configuration", 
+                  command=self.export_config).pack(side=tk.LEFT, padx=(0, 5), fill=tk.X, expand=True)
+        ttk.Button(button_row2, text="✖ Close", 
+                  command=self.on_close).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
         # === RIGHT PANEL: Step Preview ===
         right_frame = ttk.LabelFrame(main_frame, text="Step Preview", padding="10")
         right_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
@@ -268,26 +302,6 @@ class CalibrationWindow(tk.Toplevel):
                                            length=300, maximum=100)
         self.progress_bar.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         self.progress_bar['value'] = 0
-        
-        # === BOTTOM: Action Buttons ===
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=1, column=0, columnspan=2, pady=(10, 0))
-        
-        self.start_button = ttk.Button(button_frame, text="Start Calibration Routine", 
-                  command=self.start_routine,
-                  style='Accent.TButton')
-        self.start_button.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_button = ttk.Button(button_frame, text="Stop Calibration", 
-                  command=self.stop_routine,
-                  style='Warning.TButton',
-                  state='disabled')
-        self.stop_button.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(button_frame, text="Export Configuration", 
-                  command=self.export_config).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Close", 
-                  command=self.on_close).pack(side=tk.LEFT, padx=5)
         
         # Bind variables to auto-update
         self.initial_conc_var.trace('w', lambda *args: self.update_step_preview())
@@ -561,6 +575,10 @@ class CalibrationWindow(tk.Toplevel):
                                 self.parent_window.print_to_command_output(
                                     f"  Selection returned: address {addr_mix}", 'info'
                                 )
+                            
+                            # Update current_gas2_address for automatic mode monitoring
+                            if hasattr(self.parent_window, 'current_gas2_address'):
+                                self.parent_window.current_gas2_address = addr_mix
                             
                             # Verify the selected address is in the configured mix addresses
                             if addr_mix is None:

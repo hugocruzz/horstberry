@@ -145,14 +145,27 @@ class FlowController:
         return found_instruments
 
     def set_flow(self, address: int, flow: float) -> bool:
-        """Set flow for a specific instrument"""
+        """Set flow for a specific instrument
+        
+        Args:
+            flow: Flow rate in L/min (will be converted to instrument's native units)
+        """
         try: 
-            max_flow = self.max_flows.get(address, 1.5) # Default to 1.5 if not set
-            percentage = (flow / max_flow) * 100
+            max_flow = self.max_flows.get(address, 1.5)
+            unit = self.units.get(address, 'ln/min')
+            
+            # Convert flow from L/min to instrument's native units
+            flow_native = flow
+            if 'ml' in unit.lower() or 'mln' in unit.lower():
+                # Instrument expects ml/min, convert from L/min
+                flow_native = flow * 1000
+            
+            # Calculate percentage based on native units
+            percentage = (flow_native / max_flow) * 100
             value = int((percentage / 100.0) * 32000)
             self.instruments[address].writeParameter(9, value)
-            self.setpoints[address] = flow  # Store setpoint
-            print(f"Debug - Set flow for address {address}: Flow={flow}, Max Flow={max_flow}, Value={value}")
+            self.setpoints[address] = flow  # Store setpoint in L/min
+            print(f"Debug - Set flow for address {address}: Flow={flow:.6f} L/min ({flow_native:.4f} {unit}), Max={max_flow} {unit}, Percentage={percentage:.2f}%, Value={value}")
             return True
         except KeyError:
             print(f"Error: No instrument at address {address}")

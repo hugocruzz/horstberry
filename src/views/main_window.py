@@ -685,7 +685,7 @@ class MainWindow(tk.Frame):
     def open_calibration_window(self):
         """Open the calibration routine window"""
         try:
-            calibration_win = CalibrationWindow(self.parent, self.controller)
+            calibration_win = CalibrationWindow(self, self.controller)
             # Don't use grab_set() to allow navigation in main window
         except Exception as e:
             self.print_to_command_output(f"Error opening calibration window: {e}", 'error')
@@ -1044,25 +1044,15 @@ class MainWindow(tk.Frame):
             )
             return None
         
-        # Select the best instrument by explicit priority: 8 (low) > 5 (medium) > 3 (high)
-        # This ensures we always use the smallest range for best accuracy
-        priority_order = [8, 5, 3]
-        best = None
+        # Sort by utilization percentage (descending) - highest utilization = best accuracy
+        # The instrument running closest to its max capacity will have best precision
+        candidates.sort(key=lambda x: x['utilization'], reverse=True)
         
-        for priority_addr in priority_order:
-            for candidate in candidates:
-                if candidate['address'] == priority_addr:
-                    best = candidate
-                    break
-            if best:
-                break
-        
-        # Fallback: if none of the priority addresses matched, use the first candidate
-        if not best:
-            best = candidates[0]
+        # Select the best candidate (highest utilization)
+        best = candidates[0]
         
         self.print_to_command_output(
-            f"[DEBUG]   Selected: {best['name']} (addr {best['address']}, range: {best['min_flow']:.6f}-{best['max_flow']:.6f} L/min, utilization: {best['utilization']:.1f}%)", 'success'
+            f"[DEBUG]   Selected: {best['name']} (addr {best['address']}, utilization: {best['utilization']:.1f}%)", 'success'
         )
         self.print_to_command_output(
             f"Flow {required_flow:.3f} ln/min → {best['name']} "
@@ -1446,6 +1436,14 @@ class MainWindow(tk.Frame):
                 self.ax1.plot(self.times, self.flow1_data['pv'], color=color_flow1, 
                             linewidth=2.5, label='Measured', alpha=0.9)
                 self.ax1.fill_between(self.times, self.flow1_data['pv'], alpha=0.1, color=color_flow1)
+                
+                # Add setpoint line if available
+                address_1 = self.instrument_addresses.get('gas1')
+                if address_1 and address_1 in self.controller.setpoints:
+                    setpoint = self.controller.setpoints[address_1]
+                    self.ax1.axhline(y=setpoint, color='#E74C3C', linestyle='--', 
+                                   linewidth=1.5, label=f'Setpoint: {setpoint:.3f}', alpha=0.7)
+                
                 self.ax1.legend(loc='upper right', fontsize=8, framealpha=0.9)
             else:
                 self.ax1.text(0.5, 0.5, 'Waiting for data...', 
@@ -1470,6 +1468,15 @@ class MainWindow(tk.Frame):
                 self.ax2.plot(self.times, self.flow2_data['pv'], color=color_flow2, 
                             linewidth=2.5, label='Measured', alpha=0.9)
                 self.ax2.fill_between(self.times, self.flow2_data['pv'], alpha=0.1, color=color_flow2)
+                
+                # Add setpoint line if available
+                address_2_raw = self.instrument_addresses.get('gas2')
+                address_2 = self.current_gas2_address if address_2_raw == 'auto' else address_2_raw
+                if address_2 and address_2 in self.controller.setpoints:
+                    setpoint = self.controller.setpoints[address_2]
+                    self.ax2.axhline(y=setpoint, color='#E74C3C', linestyle='--', 
+                                   linewidth=1.5, label=f'Setpoint: {setpoint:.3f}', alpha=0.7)
+                
                 self.ax2.legend(loc='upper right', fontsize=8, framealpha=0.9)
             else:
                 self.ax2.text(0.5, 0.5, 'Waiting for data...', 

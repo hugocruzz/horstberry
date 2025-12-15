@@ -1,0 +1,18 @@
+{
+  "directory": "c:\\Users\\cruz\\Documents\\SENSE\\horstberry\\calibration_file",
+  "input_concentration": "5000",
+  "total_flow": "1.0",
+  "flow_unit": "L/min",
+  "step_number": "11",
+  "step_mode": "automatic",
+  "initial_conc": "0",
+  "final_conc": "100",
+  "step_duration": "5",
+  "duration_unit": "seconds",
+  "back_forth": false,
+  "addr_neutral": 20,
+  "addr_mix_high": 3,
+  "addr_mix_med": 5,
+  "addr_mix_low": 8,
+  "addr_helium": 10
+}
