@@ -15,6 +15,7 @@ import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
+from .calibration_window import CalibrationWindow
 
 KNOWN_FLOW_RANGES = {
     8: (0.13604, 10, "mln/min"),
@@ -365,6 +366,17 @@ class MainWindow(tk.Frame):
         )
         plot_outer_frame.grid(row=0, column=2, padx=(10, 0), pady=0, sticky="nsew")
         
+        # Button frame for plot controls
+        plot_button_frame = ttk.Frame(plot_outer_frame)
+        plot_button_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Button(
+            plot_button_frame,
+            text="🔄 Reset Graphs",
+            command=self.reset_graphs,
+            style='TButton'
+        ).pack(side=tk.LEFT, padx=5)
+        
         plot_frame = ttk.Frame(plot_outer_frame)
         plot_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -417,7 +429,16 @@ class MainWindow(tk.Frame):
             command=self.scan_instruments,
             style='Primary.TButton'
         )
-        self.scan_button.pack(fill="x", pady=(0, 0))
+        self.scan_button.pack(fill="x", pady=(0, 8))
+        
+        # Calibration routine button
+        self.calibration_button = ttk.Button(
+            connection_frame,
+            text="⚙️ Calibration Routine",
+            command=self.open_calibration_window,
+            style='TButton'
+        )
+        self.calibration_button.pack(fill="x", pady=(0, 0))
 
     def setup_concentration_panel(self, parent):
         """Sets up the concentration control panel with modern styling."""
@@ -628,6 +649,14 @@ class MainWindow(tk.Frame):
                 self.after(0, lambda: self.scan_button.config(state="normal"))
 
         Thread(target=scan_thread, daemon=True).start()
+
+    def open_calibration_window(self):
+        """Open the calibration routine window"""
+        try:
+            calibration_win = CalibrationWindow(self.parent, self.controller)
+            calibration_win.grab_set()  # Make it modal
+        except Exception as e:
+            self.print_to_command_output(f"Error opening calibration window: {e}", 'error')
 
     def update_ui_with_scan_results(self, found_instruments):
         """Update UI after scanning is complete. ONLY updates the scrollable frame."""
@@ -923,6 +952,23 @@ class MainWindow(tk.Frame):
             
             max_flow = metadata.get('max_flow', 0)
             min_flow = metadata.get('min_flow', 0)
+            unit = metadata.get('unit', 'ln/min')
+            
+            # Log original values for debugging
+            self.print_to_command_output(
+                f"Checking addr {addr}: range {min_flow}-{max_flow} {unit} "
+                f"for required flow {required_flow} ln/min", 
+                'info'
+            )
+            
+            # Convert flow ranges to ln/min for consistent comparison
+            if unit == 'ml/min' or unit == 'mln/min':
+                max_flow = max_flow / 1000  # Convert ml/min to ln/min
+                min_flow = min_flow / 1000
+                self.print_to_command_output(
+                    f"  → Converted to {min_flow:.6f}-{max_flow:.3f} ln/min", 
+                    'info'
+                )
             
             # Check if the instrument can handle this flow
             if min_flow <= required_flow <= max_flow:
@@ -1407,6 +1453,76 @@ class MainWindow(tk.Frame):
             self.canvas.draw_idle()
         except Exception as e:
             print(f"Error updating main plots: {e}")
+    
+    def reset_graphs(self):
+        """Reset all graph axes and clear data"""
+        try:
+            # Clear all data arrays
+            self.times = []
+            self.flow1_data = {'pv': []}
+            self.flow2_data = {'pv': []}
+            self.conc_data = {'target': [], 'actual': []}
+            self.uncertainty_data = []
+            
+            # Clear all three axes
+            if hasattr(self, 'ax1'):
+                self.ax1.clear()
+                self.ax1.set_facecolor('#FAFAFA')
+                self.ax1.grid(True, linestyle='--', alpha=0.3, color='#ECF0F1', linewidth=0.8)
+                self.ax1.set_ylabel('Flow (ln/min)', fontsize=10, fontweight='bold', color=self.colors['text'])
+                self.ax1.set_title('Base Gas Flow', fontsize=11, fontweight='bold', color=self.colors['primary'], pad=10)
+                self.ax1.tick_params(axis='x', rotation=45, labelsize=9, colors=self.colors['text'])
+                self.ax1.tick_params(axis='y', labelsize=9, colors=self.colors['text'])
+                self.ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+                self.ax1.spines['top'].set_visible(False)
+                self.ax1.spines['right'].set_visible(False)
+                self.ax1.spines['left'].set_color('#BDC3C7')
+                self.ax1.spines['bottom'].set_color('#BDC3C7')
+                self.ax1.spines['left'].set_linewidth(1.5)
+                self.ax1.spines['bottom'].set_linewidth(1.5)
+            
+            if hasattr(self, 'ax2'):
+                self.ax2.clear()
+                self.ax2.set_facecolor('#FAFAFA')
+                self.ax2.grid(True, linestyle='--', alpha=0.3, color='#ECF0F1', linewidth=0.8)
+                self.ax2.set_ylabel('Flow (ln/min)', fontsize=10, fontweight='bold', color=self.colors['text'])
+                self.ax2.set_title('Variable Gas Flow', fontsize=11, fontweight='bold', color=self.colors['primary'], pad=10)
+                self.ax2.tick_params(axis='x', rotation=45, labelsize=9, colors=self.colors['text'])
+                self.ax2.tick_params(axis='y', labelsize=9, colors=self.colors['text'])
+                self.ax2.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+                self.ax2.spines['top'].set_visible(False)
+                self.ax2.spines['right'].set_visible(False)
+                self.ax2.spines['left'].set_color('#BDC3C7')
+                self.ax2.spines['bottom'].set_color('#BDC3C7')
+                self.ax2.spines['left'].set_linewidth(1.5)
+                self.ax2.spines['bottom'].set_linewidth(1.5)
+            
+            if hasattr(self, 'ax3'):
+                self.ax3.clear()
+                self.ax3.set_facecolor('#FAFAFA')
+                self.ax3.grid(True, linestyle='--', alpha=0.3, color='#ECF0F1', linewidth=0.8)
+                self.ax3.set_xlabel('Time', fontsize=10, fontweight='bold', color=self.colors['text'])
+                self.ax3.set_ylabel('Concentration (ppm)', fontsize=10, fontweight='bold', color=self.colors['text'])
+                self.ax3.set_title('Concentration with Uncertainty', fontsize=11, fontweight='bold', color=self.colors['primary'], pad=10)
+                self.ax3.tick_params(axis='x', rotation=45, labelsize=9, colors=self.colors['text'])
+                self.ax3.tick_params(axis='y', labelsize=9, colors=self.colors['text'])
+                self.ax3.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+                self.ax3.spines['top'].set_visible(False)
+                self.ax3.spines['right'].set_visible(False)
+                self.ax3.spines['left'].set_color('#BDC3C7')
+                self.ax3.spines['bottom'].set_color('#BDC3C7')
+                self.ax3.spines['left'].set_linewidth(1.5)
+                self.ax3.spines['bottom'].set_linewidth(1.5)
+            
+            # Redraw the canvas
+            if hasattr(self, 'canvas'):
+                self.fig.tight_layout(pad=2.5)
+                self.canvas.draw_idle()
+            
+            self.print_to_command_output("Graphs reset successfully", 'success')
+            
+        except Exception as e:
+            self.print_to_command_output(f"Error resetting graphs: {e}", 'error')
         
     def open_graph_window(self):
         """Open the graph in a new window."""
