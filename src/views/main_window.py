@@ -1037,14 +1037,15 @@ class MainWindow(tk.Frame):
             )
             return None
         
-        # Sort by utilization percentage (descending) - we want the instrument that will run closest to its max
-        candidates.sort(key=lambda x: x['utilization'], reverse=True)
+        # Sort by max_flow (ascending) - we want the lowest range that can handle the flow for best accuracy
+        # Example: 10 ml/min → use low (0.01 L/min max), 11 ml/min → use medium (0.15 L/min max)
+        candidates.sort(key=lambda x: x['max_flow'])
         
-        # Select the best candidate (highest utilization)
+        # Select the best candidate (lowest max range)
         best = candidates[0]
         
         self.print_to_command_output(
-            f"[DEBUG]   Selected: {best['name']} (utilization: {best['utilization']:.1f}%)", 'success'
+            f"[DEBUG]   Selected: {best['name']} (lowest suitable range, utilization: {best['utilization']:.1f}%)", 'success'
         )
         self.print_to_command_output(
             f"Flow {required_flow:.3f} ln/min → {best['name']} "

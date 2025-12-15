@@ -16,7 +16,7 @@ class CalibrationWindow(tk.Toplevel):
         self.controller = controller
         self.parent_window = parent
         self.title("Concentration Calibration Routine Mode")
-        self.geometry("1100x750")  # Bigger window
+        self.geometry("950x650")  # Compact window
         self.resizable(True, True)
         
         # Settings file path
@@ -66,7 +66,7 @@ class CalibrationWindow(tk.Toplevel):
     def setup_gui(self):
         """Setup the GUI layout"""
         # Main container with padding
-        main_frame = ttk.Frame(self, padding="20")
+        main_frame = ttk.Frame(self, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         self.columnconfigure(0, weight=1)
@@ -75,18 +75,18 @@ class CalibrationWindow(tk.Toplevel):
         main_frame.columnconfigure(1, weight=1)
         
         # === LEFT PANEL: Configuration ===
-        left_frame = ttk.LabelFrame(main_frame, text="Calibration Configuration", padding="15")
-        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        left_frame = ttk.LabelFrame(main_frame, text="Calibration Configuration", padding="10")
+        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         
         row = 0
         
         # Directory selection
-        ttk.Label(left_frame, text="Data Directory:", font=('Segoe UI', 10, 'bold')).grid(
-            row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
+        ttk.Label(left_frame, text="Data Directory:", font=('Segoe UI', 9, 'bold')).grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
         row += 1
         
         dir_frame = ttk.Frame(left_frame)
-        dir_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
+        dir_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 8))
         dir_frame.columnconfigure(0, weight=1)
         
         ttk.Entry(dir_frame, textvariable=self.directory_var, state='readonly', 
@@ -97,37 +97,37 @@ class CalibrationWindow(tk.Toplevel):
         
         # Input gas concentration
         ttk.Label(left_frame, text="Input Gas Concentration (ppm):", 
-                 font=('Segoe UI', 10)).grid(row=row, column=0, sticky=tk.W, pady=(5, 5))
+                 font=('Segoe UI', 9)).grid(row=row, column=0, sticky=tk.W, pady=(3, 3))
         ttk.Entry(left_frame, textvariable=self.input_concentration_var, 
-                 width=20).grid(row=row, column=1, sticky=tk.W, pady=(5, 5))
+                 width=20).grid(row=row, column=1, sticky=tk.W, pady=(3, 3))
         row += 1
         
         # Total flow
         ttk.Label(left_frame, text="Total Flow:", 
-                 font=('Segoe UI', 10)).grid(row=row, column=0, sticky=tk.W, pady=(5, 5))
+                 font=('Segoe UI', 9)).grid(row=row, column=0, sticky=tk.W, pady=(3, 3))
         flow_frame = ttk.Frame(left_frame)
-        flow_frame.grid(row=row, column=1, sticky=tk.W, pady=(5, 5))
+        flow_frame.grid(row=row, column=1, sticky=tk.W, pady=(3, 3))
         ttk.Entry(flow_frame, textvariable=self.total_flow_var, 
                  width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Combobox(flow_frame, textvariable=self.flow_unit_var, 
                     values=["L/min", "mL/min (sccm)"], state='readonly', 
-                    width=15).pack(side=tk.LEFT)
+                    width=12).pack(side=tk.LEFT)
         row += 1
         
         # Separator
         ttk.Separator(left_frame, orient='horizontal').grid(
-            row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
+            row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
         row += 1
         
         # Gas address configuration
         ttk.Label(left_frame, text="Gas Address Configuration:", 
-                 font=('Segoe UI', 10, 'bold')).grid(row=row, column=0, columnspan=2, 
-                                                     sticky=tk.W, pady=(0, 5))
+                 font=('Segoe UI', 9, 'bold')).grid(row=row, column=0, columnspan=2, 
+                                                     sticky=tk.W, pady=(0, 3))
         row += 1
         
         # Create a compact grid for gas addresses
         addr_grid_frame = ttk.Frame(left_frame)
-        addr_grid_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        addr_grid_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 6))
         
         addr_configs = [
             ("Neutral (Air):", self.addr_neutral, 20),
@@ -150,25 +150,25 @@ class CalibrationWindow(tk.Toplevel):
         
         # Separator
         ttk.Separator(left_frame, orient='horizontal').grid(
-            row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
+            row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=8)
         row += 1
         
         # Step configuration header
         ttk.Label(left_frame, text="Step Configuration:", 
-                 font=('Segoe UI', 10, 'bold')).grid(row=row, column=0, columnspan=2, 
-                                                     sticky=tk.W, pady=(0, 10))
+                 font=('Segoe UI', 9, 'bold')).grid(row=row, column=0, columnspan=2, 
+                                                     sticky=tk.W, pady=(0, 5))
         row += 1
         
         # Step number
         ttk.Label(left_frame, text="Number of Steps:", 
-                 font=('Segoe UI', 10)).grid(row=row, column=0, sticky=tk.W, pady=(5, 5))
+                 font=('Segoe UI', 9)).grid(row=row, column=0, sticky=tk.W, pady=(3, 3))
         ttk.Entry(left_frame, textvariable=self.step_number_var, 
-                 width=20).grid(row=row, column=1, sticky=tk.W, pady=(5, 5))
+                 width=20).grid(row=row, column=1, sticky=tk.W, pady=(3, 3))
         row += 1
         
         # Step mode selection
-        mode_frame = ttk.LabelFrame(left_frame, text="Step Generation Mode", padding="10")
-        mode_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 10))
+        mode_frame = ttk.LabelFrame(left_frame, text="Step Generation Mode", padding="6")
+        mode_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(6, 6))
         row += 1
         
         # Manual mode
@@ -201,35 +201,35 @@ class CalibrationWindow(tk.Toplevel):
         
         # Step duration
         ttk.Label(left_frame, text="Step Duration:", 
-                 font=('Segoe UI', 10)).grid(row=row, column=0, sticky=tk.W, pady=(10, 5))
+                 font=('Segoe UI', 9)).grid(row=row, column=0, sticky=tk.W, pady=(5, 3))
         duration_frame = ttk.Frame(left_frame)
-        duration_frame.grid(row=row, column=1, sticky=tk.W, pady=(10, 5))
+        duration_frame.grid(row=row, column=1, sticky=tk.W, pady=(5, 3))
         ttk.Entry(duration_frame, textvariable=self.step_duration_var, 
                  width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Combobox(duration_frame, textvariable=self.duration_unit_var, 
                     values=["seconds", "minutes", "hours"], state='readonly', 
-                    width=10).pack(side=tk.LEFT)
+                    width=8).pack(side=tk.LEFT)
         row += 1
         
         # Back and forth option
         ttk.Checkbutton(left_frame, text="Back and Forth Mode", 
                        variable=self.back_forth_var,
                        command=self.update_step_preview).grid(row=row, column=0, columnspan=2, 
-                                                              sticky=tk.W, pady=(10, 0))
+                                                              sticky=tk.W, pady=(5, 0))
         row += 1
         
         # Update button (recalculates steps based on current configuration)
         ttk.Button(left_frame, text="🔄 Update Step Preview", 
                   command=self.update_step_preview).grid(row=row, column=0, columnspan=2, 
-                                                         pady=(20, 10))
+                                                         pady=(10, 5))
         ttk.Label(left_frame, text="(Recalculates steps based on current settings)", 
                  font=('Segoe UI', 8, 'italic'), foreground='#7F8C8D').grid(
-                     row=row+1, column=0, columnspan=2, pady=(0, 10))
+                     row=row+1, column=0, columnspan=2, pady=(0, 5))
         row += 2
         
         # === RIGHT PANEL: Step Preview ===
-        right_frame = ttk.LabelFrame(main_frame, text="Step Preview", padding="15")
-        right_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(10, 0))
+        right_frame = ttk.LabelFrame(main_frame, text="Step Preview", padding="10")
+        right_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
         right_frame.columnconfigure(0, weight=1)
         right_frame.rowconfigure(1, weight=1)
         
@@ -237,7 +237,7 @@ class CalibrationWindow(tk.Toplevel):
         info_label = ttk.Label(right_frame, 
                               text="Computed steps will appear below:",
                               font=('Segoe UI', 9, 'italic'))
-        info_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        info_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
         
         # Step list with scrollbar
         list_frame = ttk.Frame(right_frame)
@@ -249,7 +249,7 @@ class CalibrationWindow(tk.Toplevel):
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         
         self.step_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
-                                       font=('Consolas', 10), height=20)
+                                       font=('Consolas', 9), height=16)
         self.step_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.config(command=self.step_listbox.yview)
         
@@ -257,21 +257,21 @@ class CalibrationWindow(tk.Toplevel):
         self.summary_label = ttk.Label(right_frame, text="", 
                                        font=('Segoe UI', 9, 'bold'),
                                        foreground='#2E86AB')
-        self.summary_label.grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
+        self.summary_label.grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
         
         # Progress bar
         self.progress_label = ttk.Label(right_frame, text="Progress: 0%", 
                                        font=('Segoe UI', 9, 'bold'))
-        self.progress_label.grid(row=3, column=0, sticky=tk.W, pady=(10, 5))
+        self.progress_label.grid(row=3, column=0, sticky=tk.W, pady=(5, 3))
         
         self.progress_bar = ttk.Progressbar(right_frame, mode='determinate', 
                                            length=300, maximum=100)
-        self.progress_bar.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        self.progress_bar.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         self.progress_bar['value'] = 0
         
         # === BOTTOM: Action Buttons ===
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=1, column=0, columnspan=2, pady=(20, 0))
+        button_frame.grid(row=1, column=0, columnspan=2, pady=(10, 0))
         
         self.start_button = ttk.Button(button_frame, text="Start Calibration Routine", 
                   command=self.start_routine,
