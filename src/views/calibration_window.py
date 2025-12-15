@@ -537,22 +537,52 @@ class CalibrationWindow(tk.Toplevel):
                             total_flow
                         )
                         
+                        if hasattr(self.parent_window, 'print_to_command_output'):
+                            self.parent_window.print_to_command_output(
+                                f"  Calculated flows: Methane={Q_methane:.6f} L/min, Air={Q_air:.6f} L/min", 'info'
+                            )
+                        
                         # Get neutral gas (air) address
                         addr_neutral = self.addr_neutral.get()
                         
                         # Use automatic selection for mix gas (methane) from configured addresses
                         available_addrs = [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]
+                        
+                        if hasattr(self.parent_window, 'print_to_command_output'):
+                            self.parent_window.print_to_command_output(
+                                f"  Selecting instrument for methane flow {Q_methane:.6f} L/min from addresses {available_addrs}", 'info'
+                            )
+                        
                         if hasattr(self.parent_window, 'select_best_instrument_for_flow'):
+                            # Call the selection method
                             addr_mix = self.parent_window.select_best_instrument_for_flow(Q_methane)
-                            if addr_mix is None or addr_mix not in available_addrs:
+                            
+                            if hasattr(self.parent_window, 'print_to_command_output'):
+                                self.parent_window.print_to_command_output(
+                                    f"  Selection returned: address {addr_mix}", 'info'
+                                )
+                            
+                            # Verify the selected address is in the configured mix addresses
+                            if addr_mix is None:
                                 if hasattr(self.parent_window, 'print_to_command_output'):
                                     self.parent_window.print_to_command_output(
-                                        f"Warning: No suitable instrument for {Q_methane:.3f} L/min, skipping step", 'warning'
+                                        f"Warning: No suitable instrument found for {Q_methane:.6f} L/min, skipping step", 'warning'
                                     )
                                 continue
+                            elif addr_mix not in available_addrs:
+                                if hasattr(self.parent_window, 'print_to_command_output'):
+                                    self.parent_window.print_to_command_output(
+                                        f"Warning: Selected address {addr_mix} not in configured mix addresses {available_addrs}, using fallback", 'warning'
+                                    )
+                                # Use the first available address as fallback
+                                addr_mix = available_addrs[0]
                         else:
                             # Fallback to high flow if selection method not available
                             addr_mix = self.addr_mix_high.get()
+                            if hasattr(self.parent_window, 'print_to_command_output'):
+                                self.parent_window.print_to_command_output(
+                                    f"  Using fallback: address {addr_mix}", 'info'
+                                )
                         
                         # Set flows: neutral gas (air) and mix gas (methane)
                         self.controller.set_flow(addr_neutral, Q_air)

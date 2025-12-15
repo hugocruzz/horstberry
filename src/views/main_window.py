@@ -60,6 +60,9 @@ class MainWindow(tk.Frame):
         self.in_calibration_mode = False
         self.calibration_status_var = tk.StringVar(value="")
         
+        # Initialize current_gas2_address for automatic mode
+        self.current_gas2_address = None
+        
         # Configure window size and position
         window_width = self.settings.get('width', 1024)
         window_height = self.settings.get('height', 600)
@@ -721,6 +724,11 @@ class MainWindow(tk.Frame):
         if len(address_options) > 1:
             self.gas2_address_var.set("Automatic")
             self.instrument_addresses['gas2'] = 'auto'
+            # Set initial current_gas2_address to first available mix gas for monitoring
+            for addr in [3, 5, 8]:  # Try high, medium, low flow in order
+                if addr in instruments_metadata:
+                    self.current_gas2_address = addr
+                    break
             self.print_to_command_output(f"Variable gas set to Automatic mode (will select best instrument based on flow)", 'info')
         
         # Display instruments in the specified order
@@ -978,6 +986,10 @@ class MainWindow(tk.Frame):
         # Get all available instruments (excluding base gas at address 20)
         instruments_metadata = self.controller.get_instrument_metadata()
         
+        self.print_to_command_output(
+            f"[DEBUG] Selecting instrument for flow {required_flow:.6f} L/min", 'info'
+        )
+        
         # Build a list of candidate instruments with their ranges
         candidates = []
         for addr, metadata in instruments_metadata.items():
@@ -988,11 +1000,8 @@ class MainWindow(tk.Frame):
             min_flow = metadata.get('min_flow', 0)
             unit = metadata.get('unit', 'ln/min')
             
-            # Log original values for debugging
             self.print_to_command_output(
-                f"Checking addr {addr}: range {min_flow}-{max_flow} {unit} "
-                f"for required flow {required_flow} ln/min", 
-                'info'
+                f"[DEBUG]   Addr {addr}: range {min_flow:.4f}-{max_flow:.4f} {unit}", 'info'
             )
             
             # Convert flow ranges to ln/min for consistent comparison
@@ -1000,14 +1009,16 @@ class MainWindow(tk.Frame):
                 max_flow = max_flow / 1000  # Convert ml/min to ln/min
                 min_flow = min_flow / 1000
                 self.print_to_command_output(
-                    f"  → Converted to {min_flow:.6f}-{max_flow:.3f} ln/min", 
-                    'info'
+                    f"[DEBUG]     → Converted: {min_flow:.6f}-{max_flow:.6f} L/min", 'info'
                 )
             
             # Check if the instrument can handle this flow
             if min_flow <= required_flow <= max_flow:
                 # Calculate utilization percentage (we want close to 100% for best precision)
                 utilization = (required_flow / max_flow) * 100 if max_flow > 0 else 0
+                self.print_to_command_output(
+                    f"[DEBUG]     ✓ Can handle flow (utilization: {utilization:.1f}%)", 'info'
+                )
                 candidates.append({
                     'address': addr,
                     'max_flow': max_flow,
@@ -1015,8 +1026,15 @@ class MainWindow(tk.Frame):
                     'utilization': utilization,
                     'name': INSTRUMENT_NAMES.get(addr, f"Address {addr}")
                 })
+            else:
+                self.print_to_command_output(
+                    f"[DEBUG]     ✗ Cannot handle flow (out of range)", 'info'
+                )
         
         if not candidates:
+            self.print_to_command_output(
+                f"[DEBUG]   No suitable instrument found!", 'warning'
+            )
             return None
         
         # Sort by utilization percentage (descending) - we want the instrument that will run closest to its max
@@ -1025,6 +1043,9 @@ class MainWindow(tk.Frame):
         # Select the best candidate (highest utilization)
         best = candidates[0]
         
+        self.print_to_command_output(
+            f"[DEBUG]   Selected: {best['name']} (utilization: {best['utilization']:.1f}%)", 'success'
+        )
         self.print_to_command_output(
             f"Flow {required_flow:.3f} ln/min → {best['name']} "
             f"(range: {best['min_flow']:.4f}-{best['max_flow']:.2f} ln/min, "
