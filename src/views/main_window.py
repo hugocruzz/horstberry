@@ -56,6 +56,10 @@ class MainWindow(tk.Frame):
         # The application will only run on Windows, so is_raspberry can be set to False
         self.is_raspberry = False
         
+        # Calibration mode tracking
+        self.in_calibration_mode = False
+        self.calibration_status_var = tk.StringVar(value="")
+        
         # Configure window size and position
         window_width = self.settings.get('width', 1024)
         window_height = self.settings.get('height', 600)
@@ -331,12 +335,37 @@ class MainWindow(tk.Frame):
         header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
         header_frame.grid_columnconfigure(0, weight=1)
         
+        # Title and calibration status
+        title_frame = ttk.Frame(header_frame)
+        title_frame.grid(row=0, column=0, sticky="w", padx=15)
+        
         ttk.Label(
-            header_frame,
+            title_frame,
             text="🔧 Direct Flow Control",
             font=('Segoe UI', 12, 'bold'),
             foreground=self.colors['primary']
-        ).grid(row=0, column=0, sticky="w", padx=15)
+        ).pack(side=tk.LEFT)
+        
+        # Calibration mode indicator
+        self.calibration_indicator = ttk.Label(
+            title_frame,
+            textvariable=self.calibration_status_var,
+            font=('Segoe UI', 10, 'bold'),
+            foreground='#E74C3C',
+            background='#FFE5E5',
+            padding=(10, 2)
+        )
+        self.calibration_indicator.pack(side=tk.LEFT, padx=(15, 0))
+        
+        # Update indicator visibility based on status
+        def update_indicator_visibility(*args):
+            if self.calibration_status_var.get():
+                self.calibration_indicator.pack(side=tk.LEFT, padx=(15, 0))
+            else:
+                self.calibration_indicator.pack_forget()
+        
+        self.calibration_status_var.trace('w', update_indicator_visibility)
+        update_indicator_visibility()  # Initial update
         
         # Stop All button
         stop_all_button = ttk.Button(

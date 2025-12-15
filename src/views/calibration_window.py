@@ -2,6 +2,10 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Optional, List
 import os
+import json
+import time
+from threading import Thread
+from datetime import datetime
 
 
 class CalibrationWindow(tk.Toplevel):
@@ -10,28 +14,47 @@ class CalibrationWindow(tk.Toplevel):
     def __init__(self, parent, controller):
         super().__init__(parent)
         self.controller = controller
+        self.parent_window = parent
         self.title("Concentration Calibration Routine Mode")
         self.geometry("900x700")
         self.resizable(True, True)
         
-        # Variables
-        self.directory_var = tk.StringVar(value="No directory selected")
-        self.input_concentration_var = tk.StringVar(value="5000")
-        self.total_flow_var = tk.StringVar(value="1.0")
-        self.flow_unit_var = tk.StringVar(value="L/min")
-        self.step_number_var = tk.StringVar(value="10")
-        self.step_mode_var = tk.StringVar(value="automatic")  # "manual" or "automatic"
-        self.initial_conc_var = tk.StringVar(value="0")
-        self.final_conc_var = tk.StringVar(value="100")
-        self.step_duration_var = tk.StringVar(value="60")
-        self.duration_unit_var = tk.StringVar(value="seconds")
-        self.back_forth_var = tk.BooleanVar(value=False)
+        # Settings file path
+        self.settings_file = os.path.join(os.getcwd(), "calibration_settings.json")
+        
+        # Default calibration directory
+        self.default_calib_dir = os.path.join(os.getcwd(), "calibration_file")
+        os.makedirs(self.default_calib_dir, exist_ok=True)
+        
+        # Load saved settings or use defaults
+        saved_settings = self.load_settings()
+        
+        # Variables with saved/default values
+        self.directory_var = tk.StringVar(value=saved_settings.get('directory', self.default_calib_dir))
+        self.input_concentration_var = tk.StringVar(value=saved_settings.get('input_concentration', '5000'))
+        self.total_flow_var = tk.StringVar(value=saved_settings.get('total_flow', '1.0'))
+        self.flow_unit_var = tk.StringVar(value=saved_settings.get('flow_unit', 'L/min'))
+        self.step_number_var = tk.StringVar(value=saved_settings.get('step_number', '11'))
+        self.step_mode_var = tk.StringVar(value=saved_settings.get('step_mode', 'automatic'))
+        self.initial_conc_var = tk.StringVar(value=saved_settings.get('initial_conc', '0'))
+        self.final_conc_var = tk.StringVar(value=saved_settings.get('final_conc', '100'))
+        self.step_duration_var = tk.StringVar(value=saved_settings.get('step_duration', '60'))
+        self.duration_unit_var = tk.StringVar(value=saved_settings.get('duration_unit', 'seconds'))
+        self.back_forth_var = tk.BooleanVar(value=saved_settings.get('back_forth', False))
         
         # Store computed steps
         self.computed_steps = []
         
+        # Calibration state
+        self.is_running = False
+        self.current_step = 0
+        self.calibration_thread = None
+        
         self.setup_gui()
         self.update_step_preview()
+        
+        # Save settings on close
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         
     def setup_gui(self):
         """Setup the GUI layout"""
@@ -80,8 +103,8 @@ class CalibrationWindow(tk.Toplevel):
         ttk.Entry(flow_frame, textvariable=self.total_flow_var, 
                  width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Combobox(flow_frame, textvariable=self.flow_unit_var, 
-                    values=["L/min", "sccm"], state='readonly', 
-                    width=8).pack(side=tk.LEFT)
+                    values=["L/min", "mL/min (sccm)"], state='readonly', 
+                    width=15).pack(side=tk.LEFT)
         row += 1
         
         # Separator
@@ -305,12 +328,16 @@ class CalibrationWindow(tk.Toplevel):
     def start_routine(self):
         """Start the calibration routine"""
         # Validate configuration
-        if self.directory_var.get() == "No directory selected":
-            messagebox.showerror("Error", "Please select a directory for data logging.")
+        if self.directory_var.get() == "No directory selected" or not os.path.exists(self.directory_var.get()):
+            messagebox.showerror("Error", "Please select a valid directory for data logging.")
             return
             
         if not self.computed_steps:
             messagebox.showerror("Error", "No calibration steps configured.")
+            return
+            
+        if not self.controller.is_connected():
+            messagebox.showerror("Error", "Please connect instruments before starting calibration.")
             return
             
         try:
@@ -321,6 +348,11 @@ class CalibrationWindow(tk.Toplevel):
             messagebox.showerror("Error", "Invalid numeric values in configuration.")
             return
         
+        # Convert flow unit to L/min if needed
+        flow_unit = self.flow_unit_var.get()
+        if "mL/min" in flow_unit or "sccm" in flow_unit:
+            total_flow = total_flow / 1000  # Convert mL/min to L/min
+        
         # Confirm before starting
         response = messagebox.askyesno(
             "Start Calibration",
@@ -330,10 +362,196 @@ class CalibrationWindow(tk.Toplevel):
         )
         
         if response:
-            messagebox.showinfo("Not Implemented", 
-                              "Calibration routine execution will be implemented in the next phase.")
-            # TODO: Implement actual calibration routine logic
+            # Save settings before starting
+            self.save_settings()
             
+            # Start calibration in separate thread
+            self.is_running = True
+            self.calibration_thread = Thread(target=self._run_calibration, 
+                                            args=(input_conc, total_flow, step_duration), 
+                                            daemon=True)
+            self.calibration_thread.start()
+            
+            # Notify parent window
+            if hasattr(self.parent_window, 'print_to_command_output'):
+                self.parent_window.print_to_command_output(
+                    f"Calibration routine started: {len(self.computed_steps)} steps", 'success'
+                )
+                # Set calibration mode flag
+                self.parent_window.in_calibration_mode = True
+                self.parent_window.calibration_status_var.set("CALIBRATION MODE ACTIVE")
+            
+    def _run_calibration(self, input_conc: float, total_flow: float, step_duration: float):
+        """Run the calibration routine in a separate thread"""
+        try:
+            # Create log file
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_file = os.path.join(self.directory_var.get(), f"calibration_{timestamp}.csv")
+            
+            with open(log_file, 'w') as f:
+                f.write("Step,Target_Conc_ppm,Actual_Conc_ppm,Base_Flow_Lmin,Variable_Flow_Lmin,Variable_Instrument,Timestamp\n")
+            
+            duration_seconds = self._convert_duration_to_seconds(step_duration, self.duration_unit_var.get())
+            
+            for step_num, target_conc in enumerate(self.computed_steps, 1):
+                if not self.is_running:
+                    break
+                
+                self.current_step = step_num
+                
+                # Update status in parent window
+                if hasattr(self.parent_window, 'print_to_command_output'):
+                    self.parent_window.print_to_command_output(
+                        f"Calibration Step {step_num}/{len(self.computed_steps)}: {target_conc:.2f} ppm", 'info'
+                    )
+                
+                # Calculate required flows (using automatic instrument selection)
+                try:
+                    # Calculate flows using the main window's logic
+                    from ..models.calculations import calculate_flows_variable
+                    
+                    Q1, Q2 = calculate_flows_variable(
+                        target_conc,
+                        input_conc,
+                        0,  # C2 is 0 for dilution with air
+                        total_flow
+                    )
+                    
+                    # Get base gas address (should be 20)
+                    addr_base = 20
+                    
+                    # Use automatic selection for variable gas
+                    if hasattr(self.parent_window, 'select_best_instrument_for_flow'):
+                        addr_variable = self.parent_window.select_best_instrument_for_flow(Q2)
+                        if addr_variable is None:
+                            if hasattr(self.parent_window, 'print_to_command_output'):
+                                self.parent_window.print_to_command_output(
+                                    f"Warning: No suitable instrument for {Q2:.3f} L/min, skipping step", 'warning'
+                                )
+                            continue
+                    else:
+                        # Fallback to address 3 if selection method not available
+                        addr_variable = 3
+                    
+                    # Set flows
+                    self.controller.set_flow(addr_base, Q1)
+                    self.controller.set_flow(addr_variable, Q2)
+                    
+                    if hasattr(self.parent_window, 'print_to_command_output'):
+                        self.parent_window.print_to_command_output(
+                            f"  Flows set: Base={Q1:.3f} L/min, Variable (addr {addr_variable})={Q2:.3f} L/min", 'info'
+                        )
+                    
+                    # Wait for stabilization and log data
+                    time.sleep(duration_seconds)
+                    
+                    # Read actual values
+                    actual_flow1 = self.controller.read_flow(addr_base) or 0
+                    actual_flow2 = self.controller.read_flow(addr_variable) or 0
+                    
+                    # Calculate actual concentration
+                    if (actual_flow1 + actual_flow2) > 0:
+                        actual_conc = (input_conc * actual_flow2) / (actual_flow1 + actual_flow2)
+                    else:
+                        actual_conc = 0
+                    
+                    # Log to file
+                    with open(log_file, 'a') as f:
+                        f.write(f"{step_num},{target_conc:.2f},{actual_conc:.2f},{actual_flow1:.4f},{actual_flow2:.4f},{addr_variable},{datetime.now().isoformat()}\n")
+                    
+                except Exception as e:
+                    if hasattr(self.parent_window, 'print_to_command_output'):
+                        self.parent_window.print_to_command_output(
+                            f"Error in step {step_num}: {e}", 'error'
+                        )
+            
+            # Calibration complete
+            self.is_running = False
+            if hasattr(self.parent_window, 'print_to_command_output'):
+                self.parent_window.print_to_command_output(
+                    f"Calibration routine completed. Data saved to: {log_file}", 'success'
+                )
+                self.parent_window.in_calibration_mode = False
+                self.parent_window.calibration_status_var.set("")
+            
+            # Stop all flows
+            self.controller.stop_all()
+            
+            messagebox.showinfo("Calibration Complete", 
+                              f"Calibration routine finished.\n\nData saved to:\n{log_file}")
+            
+        except Exception as e:
+            self.is_running = False
+            if hasattr(self.parent_window, 'print_to_command_output'):
+                self.parent_window.print_to_command_output(f"Calibration error: {e}", 'error')
+                self.parent_window.in_calibration_mode = False
+                self.parent_window.calibration_status_var.set("")
+            messagebox.showerror("Calibration Error", f"An error occurred:\n{str(e)}")
+    
+    def _convert_duration_to_seconds(self, duration: float, unit: str) -> float:
+        """Convert duration to seconds"""
+        if unit == "minutes":
+            return duration * 60
+        elif unit == "hours":
+            return duration * 3600
+        return duration  # already in seconds
+    
+    def load_settings(self) -> dict:
+        """Load saved settings from file"""
+        if os.path.exists(self.settings_file):
+            try:
+                with open(self.settings_file, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+    
+    def save_settings(self):
+        """Save current settings to file"""
+        settings = {
+            'directory': self.directory_var.get(),
+            'input_concentration': self.input_concentration_var.get(),
+            'total_flow': self.total_flow_var.get(),
+            'flow_unit': self.flow_unit_var.get(),
+            'step_number': self.step_number_var.get(),
+            'step_mode': self.step_mode_var.get(),
+            'initial_conc': self.initial_conc_var.get(),
+            'final_conc': self.final_conc_var.get(),
+            'step_duration': self.step_duration_var.get(),
+            'duration_unit': self.duration_unit_var.get(),
+            'back_forth': self.back_forth_var.get()
+        }
+        try:
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+    
+    def on_close(self):
+        """Handle window close event"""
+        # Stop calibration if running
+        if self.is_running:
+            response = messagebox.askyesno(
+                "Calibration Running",
+                "Calibration is currently running. Stop and close?",
+                icon='warning'
+            )
+            if not response:
+                return
+            self.is_running = False
+            if self.calibration_thread:
+                self.calibration_thread.join(timeout=2)
+        
+        # Save settings
+        self.save_settings()
+        
+        # Reset calibration mode in parent
+        if hasattr(self.parent_window, 'in_calibration_mode'):
+            self.parent_window.in_calibration_mode = False
+            self.parent_window.calibration_status_var.set("")
+        
+        self.destroy()
+    
     def export_config(self):
         """Export the configuration to a file"""
         if not self.computed_steps:
