@@ -1004,31 +1004,38 @@ class MainWindow(tk.Frame):
                 f"[DEBUG]   Addr {addr}: range {min_flow:.4f}-{max_flow:.4f} {unit}", 'info'
             )
             
-            # Convert flow ranges to ln/min for consistent comparison
-            if unit == 'ml/min' or unit == 'mln/min':
-                max_flow = max_flow / 1000  # Convert ml/min to ln/min
-                min_flow = min_flow / 1000
+            # Convert flow ranges to L/min for consistent comparison
+            # Units can be: 'ml/min', 'mln/min', 'ln/min', 'l/min'
+            if 'ml' in unit.lower() or 'mln' in unit.lower():
+                max_flow_lmin = max_flow / 1000  # Convert ml/min to L/min
+                min_flow_lmin = min_flow / 1000
                 self.print_to_command_output(
-                    f"[DEBUG]     → Converted: {min_flow:.6f}-{max_flow:.6f} L/min", 'info'
+                    f"[DEBUG]     → Converted: {min_flow_lmin:.6f}-{max_flow_lmin:.6f} L/min", 'info'
+                )
+            else:
+                max_flow_lmin = max_flow  # Already in L/min
+                min_flow_lmin = min_flow
+                self.print_to_command_output(
+                    f"[DEBUG]     → Already in L/min: {min_flow_lmin:.6f}-{max_flow_lmin:.6f} L/min", 'info'
                 )
             
-            # Check if the instrument can handle this flow
-            if min_flow <= required_flow <= max_flow:
-                # Calculate utilization percentage (we want close to 100% for best precision)
-                utilization = (required_flow / max_flow) * 100 if max_flow > 0 else 0
+            # Check if the instrument can handle this flow (using converted values)
+            if min_flow_lmin <= required_flow <= max_flow_lmin:
+                # Calculate utilization percentage
+                utilization = (required_flow / max_flow_lmin) * 100 if max_flow_lmin > 0 else 0
                 self.print_to_command_output(
                     f"[DEBUG]     ✓ Can handle flow (utilization: {utilization:.1f}%)", 'info'
                 )
                 candidates.append({
                     'address': addr,
-                    'max_flow': max_flow,
-                    'min_flow': min_flow,
+                    'max_flow': max_flow_lmin,  # Store converted value for sorting
+                    'min_flow': min_flow_lmin,
                     'utilization': utilization,
                     'name': INSTRUMENT_NAMES.get(addr, f"Address {addr}")
                 })
             else:
                 self.print_to_command_output(
-                    f"[DEBUG]     ✗ Cannot handle flow (out of range)", 'info'
+                    f"[DEBUG]     ✗ Cannot handle flow (required={required_flow:.6f}, range={min_flow_lmin:.6f}-{max_flow_lmin:.6f} L/min)", 'info'
                 )
         
         if not candidates:
