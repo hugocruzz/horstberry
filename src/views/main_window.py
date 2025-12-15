@@ -5,6 +5,12 @@ from threading import Thread
 from datetime import datetime
 from ..models.data_logger import DataLogger
 from ..models.calculations import calculate_real_outflow
+from ..models.uncertainty import (
+    propagate_concentration_uncertainty, 
+    calculate_flow_uncertainty,
+    convert_flow_to_mln_min,
+    format_uncertainty_string
+)
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -14,8 +20,17 @@ KNOWN_FLOW_RANGES = {
     8: (0.13604, 10, "mln/min"),
     3: (0.012023, 1.5, "ln/min"),
     5: (1.233, 150, "mln/min"),
-    10: (0.012023, 1.5, "ln/min"),
+    10: (0.000856, 2.5, "ln/min"),  # Helium: 0.856-2500 mL/min = 0.000856-2.5 L/min
     20: (0.012023, 1.5, "ln/min"),
+}
+
+# MFC Uncertainty specifications (based on ±0.5%Rd + ±0.1%FS)
+MFC_UNCERTAINTIES = {
+    8: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 10.0, 'unit': 'mln/min'},      # Low flow: 10 mL/min max
+    3: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 1500.0, 'unit': 'mln/min'},    # High flow: 1500 mL/min max
+    5: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 150.0, 'unit': 'mln/min'},     # Medium flow: 150 mL/min max
+    10: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 2500.0, 'unit': 'mln/min'},   # Helium: 2500 mL/min max
+    20: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 1500.0, 'unit': 'mln/min'},   # Base gas (air): 1500 mL/min max
 }
 
 # Instrument naming and display order configuration
@@ -49,12 +64,101 @@ class MainWindow(tk.Frame):
         center_y = int(screen_height/2 - window_height/2)
         self.parent.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
         
-        # Configure styling with larger fonts
+        # Modern color scheme
+        self.colors = {
+            'primary': '#2C3E50',      # Dark blue-gray
+            'secondary': '#3498DB',    # Bright blue
+            'accent': '#E74C3C',       # Red accent
+            'success': '#27AE60',      # Green
+            'warning': '#F39C12',      # Orange
+            'background': '#ECF0F1',   # Light gray
+            'card': '#FFFFFF',         # White
+            'text': '#2C3E50',         # Dark text
+            'border': '#BDC3C7',       # Light border
+            'hover': '#D5DBDB'         # Hover state
+        }
+        
+        # Configure modern styling with better fonts and spacing
         self.style = ttk.Style()
-        self.style.configure('TLabel', font=('Helvetica', 14))
-        self.style.configure('TButton', font=('Helvetica', 14), padding=8)
-        self.style.configure('TEntry', font=('Helvetica', 14))
-        self.style.configure('TLabelframe', font=('Helvetica', 14, 'bold'))
+        self.style.theme_use('clam')  # More modern base theme
+        
+        # Main background
+        self.configure(bg=self.colors['background'])
+        
+        # Labels - modern sans-serif font
+        self.style.configure('TLabel', 
+                           font=('Segoe UI', 11),
+                           background=self.colors['background'],
+                           foreground=self.colors['text'])
+        
+        # Buttons - modern flat design with rounded appearance
+        self.style.configure('TButton', 
+                           font=('Segoe UI', 11, 'bold'),
+                           padding=(12, 8),
+                           borderwidth=0,
+                           focuscolor='none',
+                           background=self.colors['secondary'])
+        self.style.map('TButton',
+                      background=[('active', self.colors['primary']),
+                                ('pressed', '#2980B9')])
+        
+        # Primary action button style
+        self.style.configure('Primary.TButton',
+                           font=('Segoe UI', 11, 'bold'),
+                           padding=(15, 10),
+                           background=self.colors['secondary'])
+        
+        # Success button style (for start/apply actions)
+        self.style.configure('Success.TButton',
+                           font=('Segoe UI', 11, 'bold'),
+                           padding=(12, 8),
+                           background=self.colors['success'])
+        
+        # Warning button style (for stop actions)
+        self.style.configure('Warning.TButton',
+                           font=('Segoe UI', 11, 'bold'),
+                           padding=(12, 8),
+                           background=self.colors['accent'])
+        
+        # Entry fields - clean modern look
+        self.style.configure('TEntry', 
+                           font=('Segoe UI', 11),
+                           fieldbackground=self.colors['card'],
+                           borderwidth=2,
+                           relief='flat')
+        
+        # LabelFrame - modern card-like appearance
+        self.style.configure('TLabelframe', 
+                           font=('Segoe UI', 12, 'bold'),
+                           background=self.colors['background'],
+                           foreground=self.colors['primary'],
+                           borderwidth=2,
+                           relief='groove')
+        self.style.configure('TLabelframe.Label',
+                           font=('Segoe UI', 12, 'bold'),
+                           background=self.colors['background'],
+                           foreground=self.colors['primary'])
+        
+        # Card-style frame for instruments
+        self.style.configure('Card.TFrame',
+                           background=self.colors['card'],
+                           relief='raised',
+                           borderwidth=1)
+        
+        # Regular frame style (white background for scrollable areas)
+        self.style.configure('TFrame',
+                           background=self.colors['card'])
+        
+        # Combobox styling
+        self.style.configure('TCombobox',
+                           font=('Segoe UI', 11),
+                           fieldbackground=self.colors['card'],
+                           background=self.colors['card'],
+                           borderwidth=2)
+        
+        # Separator
+        self.style.configure('TSeparator',
+                           background=self.colors['border'])
         
         # Configure grid weights
         self.parent.grid_rowconfigure(0, weight=1)
@@ -80,6 +184,9 @@ class MainWindow(tk.Frame):
             'gas2': None  # Variable gas - assigned during scan
         }
         
+        # Track the actual address being used for gas2 (for plotting when in auto mode)
+        self.current_gas2_address = None
+        
         # Configure fonts based on platform settings
         self.default_font = (self.settings['font_family'], self.settings['font_size'])
 
@@ -88,6 +195,15 @@ class MainWindow(tk.Frame):
         self.flow1_data = {'sp': [], 'pv': []}
         self.flow2_data = {'sp': [], 'pv': []}
         self.conc_data = {'target': [], 'actual': []}  # Add concentration data
+        self.uncertainty_data = []  # Store uncertainty values for plotting
+        
+        # Uncertainty tracking
+        self.current_uncertainty = {
+            'u_C': 0.0,
+            'u_F1': 0.0,
+            'u_F2': 0.0,
+            'C_expected': 0.0
+        }
         
         # Initialize a dict to hold the flow entry widgets for each instrument
         self.flow_entries = {}
@@ -95,12 +211,43 @@ class MainWindow(tk.Frame):
         # Setup UI components - make sure this is called after is_raspberry is set
         self.setup_gui()
         
-        # Add a command output window (Text widget) at the bottom, spanning all columns
-        self.command_output = tk.Text(
-            self.main_container, height=8, width=80, state='disabled',
-            bg='#f4f4f4', font=('Consolas', 11)
+        # Add a modern command output window with enhanced styling
+        output_frame = ttk.Frame(self.main_container, style='Card.TFrame')
+        output_frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(10, 10))
+        output_frame.grid_columnconfigure(0, weight=1)
+        
+        # Add a header for the command output
+        output_header = ttk.Label(
+            output_frame, 
+            text="📋 System Log",
+            font=('Segoe UI', 11, 'bold'),
+            foreground=self.colors['primary'],
+            background=self.colors['card']
         )
-        self.command_output.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
+        output_header.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+        
+        self.command_output = tk.Text(
+            output_frame, 
+            height=8, 
+            width=80, 
+            state='disabled',
+            bg='#FAFAFA',  # Very light gray background
+            fg=self.colors['text'],
+            font=('Consolas', 10),
+            relief='flat',
+            borderwidth=0,
+            padx=10,
+            pady=8,
+            wrap='word'
+        )
+        self.command_output.grid(row=1, column=0, sticky="ew", padx=10, pady=(5, 10))
+        
+        # Configure text tags for colored output
+        self.command_output.tag_config('info', foreground='#3498DB')      # Blue
+        self.command_output.tag_config('success', foreground='#27AE60')   # Green
+        self.command_output.tag_config('warning', foreground='#F39C12')   # Orange
+        self.command_output.tag_config('error', foreground='#E74C3C')     # Red
+        self.command_output.tag_config('timestamp', foreground='#7F8C8D') # Gray
         
         # Add a welcome message prompting to scan for instruments
         self.update_status("Welcome! Please scan for instruments to get started", "blue")
@@ -116,23 +263,43 @@ class MainWindow(tk.Frame):
             self.status_labels['Status'].grid(row=1, column=0, columnspan=2, pady=5)
         self.status_labels['Status'].config(text=message, foreground=color)
 
-    def print_to_command_output(self, message: str):
-        """Prints a message to the command output text widget."""
+    def print_to_command_output(self, message: str, msg_type: str = 'info'):
+        """Prints a message to the command output text widget with color coding.
+        
+        Args:
+            message: The message to display
+            msg_type: Type of message ('info', 'success', 'warning', 'error')
+        """
         now = datetime.now().strftime("%H:%M:%S")
-        full_message = f"[{now}] {message}\n"
+        
+        # Choose icon based on message type
+        icons = {
+            'info': 'ℹ️',
+            'success': '✓',
+            'warning': '⚠️',
+            'error': '✗'
+        }
+        icon = icons.get(msg_type, 'ℹ️')
         
         if hasattr(self, 'command_output'):
             self.command_output.config(state='normal')
-            self.command_output.insert(tk.END, full_message)
+            
+            # Insert timestamp with gray color
+            self.command_output.insert(tk.END, f"[{now}] ", 'timestamp')
+            
+            # Insert icon and message with appropriate color
+            self.command_output.insert(tk.END, f"{icon} {message}\n", msg_type)
+            
             self.command_output.config(state='disabled')
             self.command_output.see(tk.END) # Scroll to the end
         else:
-            print(full_message) # Fallback to console if text widget not ready
+            print(f"[{now}] {icon} {message}") # Fallback to console if text widget not ready
 
     def setup_gui(self):
-        # Use a regular frame as the main container
-        self.main_container = ttk.Frame(self, padding="10")
+        # Use a modern frame as the main container with background color
+        self.main_container = ttk.Frame(self, padding="15")
         self.main_container.grid(row=0, column=0, sticky="nsew")
+        self.main_container.configure(style='TFrame')
 
         # Configure main frame grid weights
         self.grid_rowconfigure(0, weight=1)
@@ -146,47 +313,93 @@ class MainWindow(tk.Frame):
         self.main_container.grid_rowconfigure(1, weight=0)     # Command output (fixed height)
 
         # --- Left Panel for Connection and Concentration ---
-        left_panel = ttk.Frame(self.main_container)
-        left_panel.grid(row=0, column=0, padx=10, pady=5, sticky="ns")
+        left_panel = ttk.Frame(self.main_container, style='Card.TFrame', padding="10")
+        left_panel.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="ns")
         
         self.setup_connection_panel(left_panel)
         self.setup_concentration_panel(left_panel)
 
         # --- Center Panel for Direct Flow Control ---
-        self.flow_frame = ttk.LabelFrame(
-            self.main_container, 
-            text="Direct Flow Control",
-            padding="10"
+        center_container = ttk.Frame(self.main_container)
+        center_container.grid(row=0, column=1, padx=10, pady=0, sticky="nsew")
+        center_container.grid_rowconfigure(1, weight=1)
+        center_container.grid_columnconfigure(0, weight=1)
+        
+        # Header frame for title and Stop All button
+        header_frame = ttk.Frame(center_container)
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        header_frame.grid_columnconfigure(0, weight=1)
+        
+        ttk.Label(
+            header_frame,
+            text="🔧 Direct Flow Control",
+            font=('Segoe UI', 12, 'bold'),
+            foreground=self.colors['primary']
+        ).grid(row=0, column=0, sticky="w", padx=15)
+        
+        # Stop All button
+        stop_all_button = ttk.Button(
+            header_frame,
+            text="⏹ Stop All Flows",
+            command=self.stop_all_flows,
+            style='Warning.TButton'
         )
-        self.flow_frame.grid(row=0, column=1, padx=10, pady=5, sticky="nsew")
+        stop_all_button.grid(row=0, column=1, sticky="e", padx=15)
+        
+        # The flow frame (LabelFrame)
+        self.flow_frame = ttk.LabelFrame(
+            center_container,
+            text="",
+            padding="15",
+            style='TLabelframe'
+        )
+        self.flow_frame.grid(row=1, column=0, sticky="nsew")
         self.setup_flow_panel() # This now just sets up the scrollable container
 
         # --- Right Panel for Plots ---
-        plot_frame = ttk.Frame(self.main_container)
-        plot_frame.grid(row=0, column=2, padx=10, pady=5, sticky="nsew")
+        plot_outer_frame = ttk.LabelFrame(
+            self.main_container,
+            text=" 📊 Real-time Monitoring",
+            padding="10",
+            style='TLabelframe'
+        )
+        plot_outer_frame.grid(row=0, column=2, padx=(10, 0), pady=0, sticky="nsew")
+        
+        plot_frame = ttk.Frame(plot_outer_frame)
+        plot_frame.pack(fill=tk.BOTH, expand=True)
         
         # Create plots in the right panel
         if not self.is_raspberry:
             self.fig, self.ax1, self.ax2, self.ax3, self.canvas = self.create_plot_canvas(plot_frame)
 
     def setup_connection_panel(self, parent):
-        """Sets up the panel for COM port selection and scanning. This is now static."""
-        connection_frame = ttk.LabelFrame(parent, text="Connection")
-        connection_frame.pack(padx=0, pady=5, fill="x", side=tk.TOP)
+        """Sets up the panel for COM port selection and scanning with modern styling."""
+        connection_frame = ttk.LabelFrame(
+            parent, 
+            text=" 🔌 Connection",
+            padding="12",
+            style='TLabelframe'
+        )
+        connection_frame.pack(padx=0, pady=(0, 12), fill="x", side=tk.TOP)
 
-        com_port_label = ttk.Label(connection_frame, text="COM Port:")
-        com_port_label.pack(side=tk.LEFT, padx=(10, 5), pady=5)
+        # COM Port selection row
+        port_frame = ttk.Frame(connection_frame)
+        port_frame.pack(fill="x", pady=(0, 10))
+        
+        com_port_label = ttk.Label(port_frame, text="COM Port:", font=('Segoe UI', 10))
+        com_port_label.pack(side=tk.LEFT, padx=(0, 8))
 
         self.com_port_var = tk.StringVar()
         ports = [f"COM{i}" for i in range(1, 15)]
         self.com_port_dropdown = ttk.Combobox(
-            connection_frame,
+            port_frame,
             textvariable=self.com_port_var,
             values=ports,
             state="readonly",
-            width=10
+            width=12,
+            font=('Segoe UI', 10)
         )
-        self.com_port_dropdown.pack(side=tk.LEFT, padx=5, pady=5)
+        self.com_port_dropdown.pack(side=tk.LEFT, padx=0)
         self.com_port_dropdown.bind("<<ComboboxSelected>>", self.on_com_port_selected)
 
         # Set default port from settings or controller, defaulting to COM13
@@ -195,53 +408,71 @@ class MainWindow(tk.Frame):
         # Configure controller with the default port if not already set
         if not self.controller.get_port():
             self.controller.set_port(default_port)
-            self.print_to_command_output(f"COM Port set to {default_port}")
+            self.print_to_command_output(f"COM Port set to {default_port}", 'info')
 
+        # Scan button with modern primary styling
         self.scan_button = ttk.Button(
-            connection_frame, text="Scan Instruments", command=self.scan_instruments
+            connection_frame, 
+            text="🔍 Scan Instruments", 
+            command=self.scan_instruments,
+            style='Primary.TButton'
         )
-        self.scan_button.pack(side=tk.RIGHT, padx=10, pady=5)
+        self.scan_button.pack(fill="x", pady=(0, 0))
 
     def setup_concentration_panel(self, parent):
-        """Sets up the concentration control panel. This is now static."""
+        """Sets up the concentration control panel with modern styling."""
         self.concentration_frame = ttk.LabelFrame(
             parent, 
-            text="Concentration Control",
-            padding="10"
+            text=" ⚗️ Concentration Control",
+            padding="12",
+            style='TLabelframe'
         )
-        self.concentration_frame.pack(padx=0, pady=5, fill="x", side=tk.TOP)
+        self.concentration_frame.pack(padx=0, pady=(0, 0), fill="x", side=tk.TOP)
         
         row = 0
         
         # Base gas (air) - always address 20
-        ttk.Label(self.concentration_frame, text="Base gas (air):").grid(
-            row=row, column=0, padx=5, pady=5, sticky="w")
+        ttk.Label(
+            self.concentration_frame, 
+            text="Base gas (air):",
+            font=('Segoe UI', 10)
+        ).grid(row=row, column=0, padx=5, pady=8, sticky="w")
+        
         self.gas1_address_var = tk.StringVar(value="20")
-        ttk.Label(self.concentration_frame, text="Address 20", 
-                 foreground='blue', font=('Helvetica', 12, 'bold')).grid(
-            row=row, column=1, padx=5, pady=5, sticky="e")
+        address_label = ttk.Label(
+            self.concentration_frame, 
+            text="Address 20", 
+            foreground=self.colors['secondary'],
+            font=('Segoe UI', 10, 'bold')
+        )
+        address_label.grid(row=row, column=1, padx=5, pady=8, sticky="e")
         # Gas1 is always address 20
         self.instrument_addresses['gas1'] = 20
         row += 1
         
         # Gas 2 (variable concentration) instrument selection
-        ttk.Label(self.concentration_frame, text="Variable gas:").grid(
-            row=row, column=0, padx=5, pady=5, sticky="w")
+        ttk.Label(
+            self.concentration_frame, 
+            text="Variable gas:",
+            font=('Segoe UI', 10)
+        ).grid(row=row, column=0, padx=5, pady=8, sticky="w")
+        
         self.gas2_address_var = tk.StringVar(value="Not assigned")
         self.gas2_dropdown = ttk.Combobox(
             self.concentration_frame,
             textvariable=self.gas2_address_var,
             values=["Not assigned"],
             state="readonly",
-            width=12
+            width=14,
+            font=('Segoe UI', 10)
         )
-        self.gas2_dropdown.grid(row=row, column=1, padx=5, pady=5, sticky="e")
+        self.gas2_dropdown.grid(row=row, column=1, padx=5, pady=8, sticky="e")
         self.gas2_dropdown.bind("<<ComboboxSelected>>", self.on_gas2_selected)
         row += 1
         
-        # Separator
+        # Modern separator
         ttk.Separator(self.concentration_frame, orient='horizontal').grid(
-            row=row, column=0, columnspan=2, sticky='ew', pady=10)
+            row=row, column=0, columnspan=2, sticky='ew', pady=12)
         row += 1
         
         # Concentration parameters with descriptive labels
@@ -252,25 +483,106 @@ class MainWindow(tk.Frame):
         }
         
         for key in ['C_tot_ppm', 'C1_ppm', 'C2_ppm']:
-            label = ttk.Label(self.concentration_frame, text=concentration_labels[key], justify=tk.LEFT)
-            label.grid(row=row, column=0, padx=5, pady=5, sticky="w")
-            ttk.Entry(self.concentration_frame, 
-                    textvariable=self.variables[key], width=10).grid(
-                row=row, column=1, padx=5, pady=5, sticky="e")
+            label = ttk.Label(
+                self.concentration_frame, 
+                text=concentration_labels[key], 
+                justify=tk.LEFT,
+                font=('Segoe UI', 9)
+            )
+            label.grid(row=row, column=0, padx=5, pady=6, sticky="w")
+            
+            entry = ttk.Entry(
+                self.concentration_frame, 
+                textvariable=self.variables[key], 
+                width=12,
+                font=('Segoe UI', 10)
+            )
+            entry.grid(row=row, column=1, padx=5, pady=6, sticky="e")
             row += 1
 
-        ttk.Label(self.concentration_frame, text="Max Flow (ln/min):").grid(
-            row=row, column=0, padx=5, pady=5, sticky="w")
+        ttk.Label(
+            self.concentration_frame, 
+            text="Max Flow (ln/min):",
+            font=('Segoe UI', 9)
+        ).grid(row=row, column=0, padx=5, pady=6, sticky="w")
+        
         self.variables['max_flow'] = tk.DoubleVar(value=1.5)
-        ttk.Entry(self.concentration_frame, 
-                textvariable=self.variables['max_flow'], width=10).grid(
-            row=row, column=1, padx=5, pady=5, sticky="e")
+        ttk.Entry(
+            self.concentration_frame, 
+            textvariable=self.variables['max_flow'], 
+            width=12,
+            font=('Segoe UI', 10)
+        ).grid(row=row, column=1, padx=5, pady=6, sticky="e")
         row += 1
 
-        ttk.Button(self.concentration_frame, 
-                text="Calculate Flows",
-                command=self.calculate_flows).grid(
-            row=row, column=0, columnspan=2, pady=10)
+        # Modern calculate button
+        ttk.Button(
+            self.concentration_frame, 
+            text="⚡ Calculate Flows",
+            command=self.calculate_flows,
+            style='Success.TButton'
+        ).grid(row=row, column=0, columnspan=2, pady=(12, 5), sticky="ew", padx=5)
+        row += 1
+        
+        # Uncertainty display section
+        ttk.Separator(self.concentration_frame, orient='horizontal').grid(
+            row=row, column=0, columnspan=2, sticky='ew', pady=8)
+        row += 1
+        
+        # Uncertainty header
+        ttk.Label(
+            self.concentration_frame, 
+            text="📊 Measurement Uncertainty",
+            font=('Segoe UI', 10, 'bold'),
+            foreground=self.colors['primary']
+        ).grid(row=row, column=0, columnspan=2, padx=5, pady=(5, 8), sticky="w")
+        row += 1
+        
+        # Concentration uncertainty display
+        ttk.Label(
+            self.concentration_frame, 
+            text="Concentration:",
+            font=('Segoe UI', 9)
+        ).grid(row=row, column=0, padx=5, pady=3, sticky="w")
+        
+        self.uncertainty_conc_label = ttk.Label(
+            self.concentration_frame, 
+            text="—",
+            font=('Segoe UI', 9),
+            foreground=self.colors['secondary']
+        )
+        self.uncertainty_conc_label.grid(row=row, column=1, padx=5, pady=3, sticky="e")
+        row += 1
+        
+        # Flow uncertainties
+        ttk.Label(
+            self.concentration_frame, 
+            text="Base gas flow:",
+            font=('Segoe UI', 9)
+        ).grid(row=row, column=0, padx=5, pady=3, sticky="w")
+        
+        self.uncertainty_f1_label = ttk.Label(
+            self.concentration_frame, 
+            text="—",
+            font=('Segoe UI', 9),
+            foreground=self.colors['secondary']
+        )
+        self.uncertainty_f1_label.grid(row=row, column=1, padx=5, pady=3, sticky="e")
+        row += 1
+        
+        ttk.Label(
+            self.concentration_frame, 
+            text="Variable gas flow:",
+            font=('Segoe UI', 9)
+        ).grid(row=row, column=0, padx=5, pady=3, sticky="w")
+        
+        self.uncertainty_f2_label = ttk.Label(
+            self.concentration_frame, 
+            text="—",
+            font=('Segoe UI', 9),
+            foreground=self.colors['secondary']
+        )
+        self.uncertainty_f2_label.grid(row=row, column=1, padx=5, pady=3, sticky="e")
 
     def on_gas1_selected(self, event):
         """Gas1 is always address 20 (Base gas), so this is not used anymore."""
@@ -279,12 +591,16 @@ class MainWindow(tk.Frame):
     def on_gas2_selected(self, event):
         """Handle Gas 2 (variable gas) instrument selection."""
         selected = self.gas2_address_var.get()
-        if selected != "Not assigned":
+        if selected == "Automatic":
+            self.instrument_addresses['gas2'] = 'auto'
+            self.print_to_command_output(f"Variable gas set to Automatic mode", 'success')
+            self.update_status(f"Variable gas: Automatic selection enabled", "green")
+        elif selected != "Not assigned":
             try:
                 addr = int(selected.split()[0])  # Extract just the number from "3 (High flow)"
                 self.instrument_addresses['gas2'] = addr
                 instrument_name = INSTRUMENT_NAMES.get(addr, f"Address {addr}")
-                self.print_to_command_output(f"Variable gas assigned to {instrument_name} (address {addr})")
+                self.print_to_command_output(f"Variable gas assigned to {instrument_name} (address {addr})", 'success')
                 self.update_status(f"Variable gas: {instrument_name}", "green")
             except (ValueError, IndexError):
                 pass
@@ -293,21 +609,21 @@ class MainWindow(tk.Frame):
         """Handle COM port selection from the dropdown."""
         selected_port = self.com_port_var.get()
         self.controller.set_port(selected_port)
-        self.print_to_command_output(f"COM Port set to {selected_port}")
+        self.print_to_command_output(f"COM Port set to {selected_port}", 'info')
         self.update_status(f"Port set to {selected_port}. Ready to scan.", "blue")
 
     def scan_instruments(self):
         """Scan for connected instruments and update the UI."""
-        self.print_to_command_output("Scanning for instruments...")
+        self.print_to_command_output("Scanning for instruments...", 'info')
         self.scan_button.config(state="disabled")
         
         def scan_thread():
             try:
                 found_instruments = self.controller.scan_for_instruments()
-                self.after(0, lambda: self.print_to_command_output(f"Found instruments at addresses: {found_instruments}"))
+                self.after(0, lambda: self.print_to_command_output(f"Found instruments at addresses: {found_instruments}", 'success'))
                 self.after(0, self.update_ui_with_scan_results, found_instruments)
             except Exception as e:
-                self.after(0, lambda: self.print_to_command_output(f"Scan failed: {e}"))
+                self.after(0, lambda: self.print_to_command_output(f"Scan failed: {e}", 'error'))
             finally:
                 self.after(0, lambda: self.scan_button.config(state="normal"))
 
@@ -319,30 +635,30 @@ class MainWindow(tk.Frame):
             widget.destroy()
 
         if not self.controller.is_connected() or not found_instruments:
-            self.print_to_command_output("No instruments found or connection failed.")
+            self.print_to_command_output("No instruments found or connection failed.", 'warning')
             self.update_status("Scan complete. No instruments found.", "orange")
             ttk.Label(self.scrollable_frame, text="No instruments found.").pack(pady=20)
             return
 
         instruments_metadata = self.controller.get_instrument_metadata()
-        self.print_to_command_output(f"Connected to {len(instruments_metadata)} instruments at addresses: {list(instruments_metadata.keys())}")
+        self.print_to_command_output(f"Connected to {len(instruments_metadata)} instruments at addresses: {list(instruments_metadata.keys())}", 'success')
         
         # Update Gas2 dropdown with available addresses (excluding base gas at 20)
         # Format: "address (name)"
-        address_options = []
+        # Add "Automatic" as the first option
+        address_options = ["Automatic"]
         for addr in sorted(instruments_metadata.keys()):
             if addr != 20:  # Exclude base gas from variable gas selection
                 name = INSTRUMENT_NAMES.get(addr, f"Unknown")
                 address_options.append(f"{addr} ({name})")
         
-        self.gas2_dropdown['values'] = address_options if address_options else ["Not assigned"]
+        self.gas2_dropdown['values'] = address_options if len(address_options) > 1 else ["Not assigned"]
         
-        # Auto-assign first available instrument (other than 20) to gas2
-        if address_options:
-            self.gas2_address_var.set(address_options[0])
-            first_addr = int(address_options[0].split()[0])
-            self.instrument_addresses['gas2'] = first_addr
-            self.print_to_command_output(f"Auto-assigned variable gas to {INSTRUMENT_NAMES.get(first_addr, '')} (address {first_addr})")
+        # Set "Automatic" as the default selection
+        if len(address_options) > 1:
+            self.gas2_address_var.set("Automatic")
+            self.instrument_addresses['gas2'] = 'auto'
+            self.print_to_command_output(f"Variable gas set to Automatic mode (will select best instrument based on flow)", 'info')
         
         # Display instruments in the specified order
         for addr in INSTRUMENT_DISPLAY_ORDER:
@@ -364,7 +680,7 @@ class MainWindow(tk.Frame):
         if not self.controller.is_connected():
             self.update_status("Please connect and scan for instruments first.", "orange")
             return
-        self.print_to_command_output("Starting all flows...")
+        self.print_to_command_output("Starting all flows...", 'info')
         self.controller.start_all()
 
     def stop_all_flows(self):
@@ -372,14 +688,31 @@ class MainWindow(tk.Frame):
         if not self.controller.is_connected():
             self.update_status("Please connect and scan for instruments first.", "orange")
             return
-        self.print_to_command_output("Stopping all flows...")
+        self.print_to_command_output("Stopping all flows...", 'warning')
         self.controller.stop_all()
+    
+    def stop_single_flow(self, address: int):
+        """Stop flow for a single instrument by setting it to 0."""
+        try:
+            self.controller.set_flow(address, 0)
+            # Also clear the entry field
+            if address in self.flow_entries:
+                self.flow_entries[address].delete(0, tk.END)
+                self.flow_entries[address].insert(0, "0.0")
+            instrument_name = INSTRUMENT_NAMES.get(address, f"Address {address}")
+            self.print_to_command_output(f"Stopped flow for {instrument_name}", 'warning')
+        except Exception as e:
+            self.print_to_command_output(f"Error stopping flow for address {address}: {e}", 'error')
 
     def setup_flow_panel(self):
-        """Sets up the panel that contains the scrollable list of instruments."""
-        canvas = tk.Canvas(self.flow_frame, borderwidth=0)
-        self.scrollable_frame = ttk.Frame(canvas)
-        scrollbar = ttk.Scrollbar(self.flow_frame, orient="vertical", command=canvas.yview)
+        """Sets up the panel that contains the scrollable list of instruments with modern styling."""
+        # Create a container frame with a better background color
+        container = ttk.Frame(self.flow_frame)
+        container.pack(fill="both", expand=True)
+        
+        canvas = tk.Canvas(container, borderwidth=0, background='#FFFFFF', highlightthickness=0)
+        self.scrollable_frame = ttk.Frame(canvas, style='TFrame')
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
 
         scrollbar.pack(side="right", fill="y")
@@ -398,80 +731,160 @@ class MainWindow(tk.Frame):
         canvas.bind("<Configure>", on_canvas_configure)
 
     def setup_instrument_controls(self, parent: ttk.Frame, addr: int, metadata: Dict[str, Any] = None):
-        """Setup controls for a single instrument with metadata display."""
+        """Setup controls for a single instrument with modern card-style design."""
         if metadata is None:
             metadata = self.controller.get_instrument_metadata(addr)
         
         # Get instrument name from configuration
         instrument_name = INSTRUMENT_NAMES.get(addr, "Unknown")
         
-        # Create a labeled frame for this instrument
-        instrument_frame = ttk.LabelFrame(
-            parent, 
-            text=f"{instrument_name} (Address {addr})",
-            padding="10"
+        # Create a modern card-style frame for this instrument
+        instrument_outer = ttk.Frame(parent, style='Card.TFrame')
+        instrument_outer.pack(fill=tk.X, expand=True, pady=8, padx=5)
+        
+        # Header with instrument name and address
+        header_frame = ttk.Frame(instrument_outer)
+        header_frame.pack(fill=tk.X, padx=12, pady=(10, 5))
+        
+        name_label = ttk.Label(
+            header_frame,
+            text=instrument_name,
+            font=('Segoe UI', 12, 'bold'),
+            foreground=self.colors['primary']
         )
-        instrument_frame.pack(fill=tk.X, expand=True, pady=5)
+        name_label.pack(side=tk.LEFT)
         
-        control_frame = ttk.Frame(instrument_frame)
-        control_frame.pack(fill=tk.X, expand=True)
+        addr_label = ttk.Label(
+            header_frame,
+            text=f"[{addr}]",
+            font=('Segoe UI', 10),
+            foreground=self.colors['secondary']
+        )
+        addr_label.pack(side=tk.LEFT, padx=(8, 0))
         
-        # Display min/max flow range
+        # Separator line
+        ttk.Separator(instrument_outer, orient='horizontal').pack(fill=tk.X, padx=12, pady=5)
+        
+        # Main content frame
+        content_frame = ttk.Frame(instrument_outer)
+        content_frame.pack(fill=tk.X, expand=True, padx=12, pady=(0, 10))
+        
+        # Display min/max flow range with modern badge style
         min_flow = metadata.get('min_flow', 0.0)
         max_flow = metadata.get('max_flow', 0.0)
         unit = metadata.get('unit', 'ln/min')
         
-        range_label = ttk.Label(
-            control_frame, 
-            text=f"Range: {min_flow:.4f} - {max_flow:.2f} {unit}",
-            font=('Helvetica', 11, 'italic'),
-            foreground='blue'
-        )
-        range_label.grid(row=0, column=0, columnspan=5, padx=5, pady=(0, 5), sticky='w')
+        range_frame = ttk.Frame(content_frame)
+        range_frame.grid(row=0, column=0, columnspan=5, pady=(0, 10), sticky='w')
         
-        # Flow setter label and entry
-        ttk.Label(control_frame, text="Set Flow:", width=10).grid(row=1, column=0, padx=5, pady=2)
-        entry = ttk.Entry(control_frame, width=10)
-        entry.grid(row=1, column=1, padx=5, pady=2)
-        unit_label = ttk.Label(control_frame, text=unit, width=8)
-        unit_label.grid(row=1, column=2, padx=2, pady=2)
+        ttk.Label(
+            range_frame,
+            text="📊 Range:",
+            font=('Segoe UI', 9, 'bold'),
+            foreground=self.colors['text']
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Label(
+            range_frame, 
+            text=f"{min_flow:.4f} - {max_flow:.2f} {unit}",
+            font=('Segoe UI', 9),
+            foreground=self.colors['secondary']
+        ).pack(side=tk.LEFT)
+        
+        # Flow setter with modern layout
+        setter_frame = ttk.Frame(content_frame)
+        setter_frame.grid(row=1, column=0, columnspan=5, pady=(0, 12), sticky='ew')
+        
+        ttk.Label(
+            setter_frame, 
+            text="🎯 Set Flow:",
+            font=('Segoe UI', 10, 'bold')
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        
+        entry = ttk.Entry(setter_frame, width=12, font=('Segoe UI', 10))
+        entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Label(
+            setter_frame, 
+            text=unit,
+            font=('Segoe UI', 9),
+            foreground=self.colors['text']
+        ).pack(side=tk.LEFT, padx=(0, 10))
         
         # Save the entry and unit label for later use
         self.flow_entries[addr] = entry
         if addr not in self.reading_labels:
             self.reading_labels[addr] = {}
-        self.reading_labels[addr]['Unit'] = unit_label
 
-        # Add a "Set" button next to the entry
+        # Modern Apply button
         set_button = ttk.Button(
-            control_frame,
-            text="Set",
-            command=lambda a=addr: self.set_manual_flow(a)
+            setter_frame,
+            text="✓ Apply",
+            command=lambda a=addr: self.set_manual_flow(a),
+            style='Success.TButton'
         )
-        set_button.grid(row=1, column=4, padx=5, pady=2)
+        set_button.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Modern Stop button (sets flow to 0 for this instrument)
+        stop_button = ttk.Button(
+            setter_frame,
+            text="⏹ Stop",
+            command=lambda a=addr: self.stop_single_flow(a),
+            style='Warning.TButton'
+        )
+        stop_button.pack(side=tk.LEFT)
 
-        # Reading displays
+        # Reading displays with modern card-like badges
+        readings_frame = ttk.Frame(content_frame)
+        readings_frame.grid(row=2, column=0, columnspan=5, sticky='ew')
+        
         params = [
-            ('Flow', unit),
-            ('Valve', '%'),
-            ('Temperature', '°C')
+            ('Flow', unit, '💨'),
+            ('Valve', '%', '🔧'),
+            ('Temperature', '°C', '🌡️')
         ]
         
-        for i, (param, param_unit) in enumerate(params):
-            frame = ttk.Frame(control_frame)
-            frame.grid(row=i+2, column=0, columnspan=5, sticky='ew', pady=2)
+        for i, (param, param_unit, icon) in enumerate(params):
+            param_frame = ttk.Frame(readings_frame)
+            param_frame.pack(fill=tk.X, pady=4)
             
-            ttk.Label(frame, text=f"{param}:", width=10).pack(side=tk.LEFT, padx=5)
-            self.reading_labels[addr][param] = ttk.Label(
-                frame, 
+            # Icon and label
+            label_frame = ttk.Frame(param_frame)
+            label_frame.pack(side=tk.LEFT, fill=tk.X, expand=False)
+            
+            ttk.Label(
+                label_frame, 
+                text=f"{icon} {param}:",
+                font=('Segoe UI', 9),
+                width=14
+            ).pack(side=tk.LEFT)
+            
+            # Value display with modern styling
+            value_label = tk.Label(
+                param_frame,
                 text="---",
-                width=10,
-                background='white',
-                relief='sunken',
-                anchor='center'
+                width=12,
+                font=('Segoe UI', 10, 'bold'),
+                background='#F8F9FA',
+                foreground=self.colors['primary'],
+                relief='flat',
+                borderwidth=1,
+                anchor='center',
+                padx=8,
+                pady=4
             )
-            self.reading_labels[addr][param].pack(side=tk.LEFT, padx=5)
-            ttk.Label(frame, text=param_unit, width=8).pack(side=tk.LEFT, padx=2)
+            value_label.pack(side=tk.LEFT, padx=(5, 5))
+            
+            # Unit label
+            ttk.Label(
+                param_frame, 
+                text=param_unit,
+                font=('Segoe UI', 9),
+                foreground=self.colors['text'],
+                width=8
+            ).pack(side=tk.LEFT)
+            
+            self.reading_labels[addr][param] = value_label
 
     def set_manual_flow(self, address: int):
         """Set the flow for an instrument from its manual entry field."""
@@ -479,16 +892,72 @@ class MainWindow(tk.Frame):
             flow_str = self.flow_entries[address].get()
             flow = float(flow_str)
             self.controller.set_flow(address, flow)
-            self.print_to_command_output(f"Manually set flow for address {address} to {flow:.3f}")
+            self.print_to_command_output(f"Manually set flow for address {address} to {flow:.3f}", 'success')
         except ValueError:
-            self.print_to_command_output(f"Invalid flow value entered for address {address}: '{flow_str}'")
+            self.print_to_command_output(f"Invalid flow value entered for address {address}: '{flow_str}'", 'error')
         except Exception as e:
-            self.print_to_command_output(f"Error setting flow for address {address}: {e}")
+            self.print_to_command_output(f"Error setting flow for address {address}: {e}", 'error')
+    
+    def select_best_instrument_for_flow(self, required_flow: float) -> int:
+        """
+        Select the best instrument for the required flow based on available instruments.
+        The instrument should be able to handle the flow at its maximum capacity.
+        
+        Args:
+            required_flow: The required flow in ln/min
+            
+        Returns:
+            The address of the best instrument, or None if no suitable instrument found
+        """
+        if not self.controller.is_connected():
+            return None
+        
+        # Get all available instruments (excluding base gas at address 20)
+        instruments_metadata = self.controller.get_instrument_metadata()
+        
+        # Build a list of candidate instruments with their ranges
+        candidates = []
+        for addr, metadata in instruments_metadata.items():
+            if addr == 20:  # Skip base gas
+                continue
+            
+            max_flow = metadata.get('max_flow', 0)
+            min_flow = metadata.get('min_flow', 0)
+            
+            # Check if the instrument can handle this flow
+            if min_flow <= required_flow <= max_flow:
+                # Calculate utilization percentage (we want close to 100% for best precision)
+                utilization = (required_flow / max_flow) * 100 if max_flow > 0 else 0
+                candidates.append({
+                    'address': addr,
+                    'max_flow': max_flow,
+                    'min_flow': min_flow,
+                    'utilization': utilization,
+                    'name': INSTRUMENT_NAMES.get(addr, f"Address {addr}")
+                })
+        
+        if not candidates:
+            return None
+        
+        # Sort by utilization percentage (descending) - we want the instrument that will run closest to its max
+        candidates.sort(key=lambda x: x['utilization'], reverse=True)
+        
+        # Select the best candidate (highest utilization)
+        best = candidates[0]
+        
+        self.print_to_command_output(
+            f"Flow {required_flow:.3f} ln/min → {best['name']} "
+            f"(range: {best['min_flow']:.4f}-{best['max_flow']:.2f} ln/min, "
+            f"utilization: {best['utilization']:.1f}%)", 
+            'info'
+        )
+        
+        return best['address']
 
     def calculate_flows(self):
         if not self.controller.is_connected():
             self.update_status("Please connect the instruments", "red")
-            self.print_to_command_output("Please connect the instruments")
+            self.print_to_command_output("Please connect the instruments", 'warning')
             return
 
         try:
@@ -503,7 +972,7 @@ class MainWindow(tk.Frame):
                 except (ValueError, tk.TclError) as e:
                     msg = f"Invalid input for {key}"
                     self.update_status(msg, "red")
-                    self.print_to_command_output(msg)
+                    self.print_to_command_output(msg, 'error')
                     return
 
             # Get max flow value from the GUI
@@ -539,13 +1008,28 @@ class MainWindow(tk.Frame):
             
             # Map to instrument addresses
             addr1 = self.instrument_addresses.get('gas1')  # Base gas (air) - always 20
-            addr2 = self.instrument_addresses.get('gas2')  # Variable gas
+            addr2_raw = self.instrument_addresses.get('gas2')  # Variable gas (could be 'auto' or address)
             
             # Check if roles have been assigned
-            if addr1 is None or addr2 is None:
+            if addr1 is None or addr2_raw is None:
                 self.update_status("Please assign variable gas instrument.", "orange")
-                self.print_to_command_output("Please select a variable gas from the dropdown.")
+                self.print_to_command_output("Please select a variable gas from the dropdown.", 'warning')
                 return
+            
+            # Automatic instrument selection based on required flow
+            if addr2_raw == 'auto':
+                addr2 = self.select_best_instrument_for_flow(Q2)
+                if addr2 is None:
+                    self.update_status("No suitable instrument found for the required flow.", "red")
+                    self.print_to_command_output("Automatic selection failed: no suitable instrument found.", 'error')
+                    return
+                instrument_name = INSTRUMENT_NAMES.get(addr2, f"Address {addr2}")
+                self.print_to_command_output(f"Automatic mode: Selected {instrument_name} (address {addr2}) for flow {Q2:.3f} ln/min", 'success')
+                # Store the selected address temporarily for plotting (will be reset to 'auto' on next calculate)
+                self.current_gas2_address = addr2
+            else:
+                addr2 = addr2_raw
+                self.current_gas2_address = addr2
             
             flows = {addr1: Q1, addr2: Q2}
             
@@ -584,14 +1068,45 @@ class MainWindow(tk.Frame):
                     flow_messages.append(f"{instrument_name}: {str(flow)} {unit}")
 
             result_msg = "Calculated: " + ", ".join(flow_messages)
-            self.print_to_command_output(result_msg)
-            self.update_status("Flows calculated and pre-filled. Click 'Set' to apply.", "green")
+            self.print_to_command_output(result_msg, 'success')
+            
+            # Calculate and display expected uncertainty
+            try:
+                from ..models.uncertainty import calculate_required_flow_with_uncertainty
+                
+                # Convert flows to mln/min
+                Q1_mln = Q1 * 1000  # ln/min to mln/min
+                Q2_mln = Q2 * 1000
+                
+                u_details = calculate_required_flow_with_uncertainty(
+                    values['C_tot_ppm'],
+                    values['C1_ppm'],
+                    Q1_mln,
+                    values['C2_ppm'],
+                    addr1,
+                    addr2
+                )
+                
+                self.print_to_command_output(
+                    f"Expected uncertainty: ±{u_details['u_C']:.2f} ppm "
+                    f"({u_details['relative_error']:.2f}% of target)", 
+                    'info'
+                )
+                self.print_to_command_output(
+                    f"Flow uncertainties: Base gas ±{u_details['u_F1']:.3f} mln/min, "
+                    f"Variable gas ±{u_details['u_F2']:.3f} mln/min", 
+                    'info'
+                )
+            except Exception as ue:
+                print(f"Uncertainty calculation error: {ue}")
+            
+            self.update_status("Flows calculated and pre-filled. Click 'Apply' to set.", "green")
         except ValueError as e:
             self.update_status(f"Error: {str(e)}", "red")
-            self.print_to_command_output(f"Error: {str(e)}")
+            self.print_to_command_output(f"Error: {str(e)}", 'error')
         except Exception as e:
             self.update_status(f"Calculation error: {str(e)}", "red")
-            self.print_to_command_output(f"Calculation error: {str(e)}")
+            self.print_to_command_output(f"Calculation error: {str(e)}", 'error')
 
     def start_updates(self):
         """Start periodic updates of instrument readings and plots"""
@@ -628,8 +1143,15 @@ class MainWindow(tk.Frame):
             
         try:
             address_1 = self.instrument_addresses.get('gas1')
-            address_2 = self.instrument_addresses.get('gas2')
+            address_2_raw = self.instrument_addresses.get('gas2')
 
+            # For plotting, use the current selected address (in case of auto mode)
+            if address_2_raw == 'auto':
+                address_2 = self.current_gas2_address
+            else:
+                address_2 = address_2_raw
+
+            # Skip if addresses not assigned
             if address_1 is None or address_2 is None:
                 # Skip data collection if roles haven't been assigned yet
                 return
@@ -638,29 +1160,28 @@ class MainWindow(tk.Frame):
             readings_1 = self.controller.get_readings(address_1)
             readings_2 = self.controller.get_readings(address_2)
             
-            # Remove debug readings
-            # print(f"Readings from addr {address_1}: {readings_1}")
-            # print(f"Readings from addr {address_2}: {readings_2}")
-
             # Ensure 'Flow' exists in readings
             if 'Flow' not in readings_1 or 'Flow' not in readings_2:
                 # Keep this message as it's important
                 print("Missing Flow readings in controller response")
                 return
                 
-            flow1 = readings_1.get('Flow', 0)
-            flow2 = readings_2.get('Flow', 0)
+            flow1 = readings_1.get('Flow')
+            flow2 = readings_2.get('Flow')
+            
+            # Check if flows are None (reading error) - do this BEFORE unit conversion
+            if flow1 is None or flow2 is None:
+                # Skip this data point if readings failed
+                return
+            
             unit1 = readings_1.get('Unit', 'ln/min')
             unit2 = readings_2.get('Unit', 'ln/min')
 
-            # Remove debug flow values
-            # print(f"Flow values: flow1={flow1} {unit1}, flow2={flow2} {unit2}")
-
-            # Convert to ln/min if needed
-            if unit1 in ("ml/min", "mln/min"):
-                flow1 /= 1000
-            if unit2 in ("ml/min", "mln/min"):
-                flow2 /= 1000
+            # Convert to ln/min if needed (flow values are guaranteed non-None here)
+            if unit1 in ("ml/min", "mln/min") and flow1 != 0:
+                flow1 = flow1 / 1000
+            if unit2 in ("ml/min", "mln/min") and flow2 != 0:
+                flow2 = flow2 / 1000
 
             # Store flow data for plotting
             now = datetime.now()
@@ -673,12 +1194,53 @@ class MainWindow(tk.Frame):
             C2 = self.variables['C2_ppm'].get()
             if flow1 > 0 or flow2 > 0:
                 actual_conc = calculate_real_outflow(C1, flow1, C2, flow2)
+                
+                # Calculate uncertainty
+                # Convert flows to mln/min for uncertainty calculations
+                flow1_mln = convert_flow_to_mln_min(flow1, 'ln/min')
+                flow2_mln = convert_flow_to_mln_min(flow2, 'ln/min')
+                
+                u_C, details = propagate_concentration_uncertainty(
+                    C1, flow1_mln, C2, flow2_mln, 
+                    address_1, address_2
+                )
+                
+                # Store current uncertainty
+                self.current_uncertainty = {
+                    'u_C': u_C,
+                    'u_F1': details['u_F1'],
+                    'u_F2': details['u_F2'],
+                    'C_expected': details['C_expected']
+                }
+                
+                # Update uncertainty display labels
+                if hasattr(self, 'uncertainty_conc_label'):
+                    self.uncertainty_conc_label.config(
+                        text=f"±{u_C:.2f} ppm ({(u_C/actual_conc*100):.1f}%)" if actual_conc > 0 else "—"
+                    )
+                if hasattr(self, 'uncertainty_f1_label'):
+                    self.uncertainty_f1_label.config(
+                        text=f"±{details['u_F1']:.3f} mln/min"
+                    )
+                if hasattr(self, 'uncertainty_f2_label'):
+                    self.uncertainty_f2_label.config(
+                        text=f"±{details['u_F2']:.3f} mln/min"
+                    )
             else:
                 actual_conc = 0
+                u_C = 0
+                # Reset uncertainty display
+                if hasattr(self, 'uncertainty_conc_label'):
+                    self.uncertainty_conc_label.config(text="—")
+                if hasattr(self, 'uncertainty_f1_label'):
+                    self.uncertainty_f1_label.config(text="—")
+                if hasattr(self, 'uncertainty_f2_label'):
+                    self.uncertainty_f2_label.config(text="—")
 
             target_conc = self.variables['C_tot_ppm'].get()
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
+            self.uncertainty_data.append(u_C)
 
             # Remove print debug info
             # print(f"Added data point: time={now}, flow1={flow1}, flow2={flow2}, conc={actual_conc}")
@@ -692,6 +1254,7 @@ class MainWindow(tk.Frame):
                 self.flow2_data['pv'] = self.flow2_data['pv'][-max_points:]
                 self.conc_data['target'] = self.conc_data['target'][-max_points:]
                 self.conc_data['actual'] = self.conc_data['actual'][-max_points:]
+                self.uncertainty_data = self.uncertainty_data[-max_points:]
 
         except Exception as e:
             print(f"Error collecting plot data: {e}")
@@ -699,22 +1262,38 @@ class MainWindow(tk.Frame):
             traceback.print_exc()
 
     def create_plot_canvas(self, parent):
-        """Create a canvas with three subplots for flow and concentration monitoring."""
-        fig = Figure(figsize=(12, 5), dpi=100)
-        fig.patch.set_facecolor('#f0f0f0')
+        """Create a canvas with three subplots stacked vertically for flow and concentration monitoring with modern styling."""
+        fig = Figure(figsize=(8, 10), dpi=100)
+        fig.patch.set_facecolor('#FFFFFF')
         
-        # Create three subplots
-        ax1 = fig.add_subplot(131)
-        ax2 = fig.add_subplot(132)
-        ax3 = fig.add_subplot(133)
+        # Create three subplots stacked vertically (3 rows, 1 column)
+        ax1 = fig.add_subplot(311)
+        ax2 = fig.add_subplot(312)
+        ax3 = fig.add_subplot(313)
         
-        # Style the plots
+        # Modern color palette
+        plot_colors = {
+            'primary': '#3498DB',
+            'secondary': '#2ECC71',
+            'accent': '#E74C3C',
+            'grid': '#ECF0F1'
+        }
+        
+        # Style the plots with modern aesthetics
         for ax in [ax1, ax2, ax3]:
-            ax.grid(True, linestyle='--', alpha=0.6)
-            ax.tick_params(axis='x', rotation=45)
+            ax.set_facecolor('#FAFAFA')
+            ax.grid(True, linestyle='--', alpha=0.3, color=plot_colors['grid'], linewidth=0.8)
+            ax.tick_params(axis='x', rotation=45, labelsize=9, colors=self.colors['text'])
+            ax.tick_params(axis='y', labelsize=9, colors=self.colors['text'])
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#BDC3C7')
+            ax.spines['bottom'].set_color('#BDC3C7')
+            ax.spines['left'].set_linewidth(1.5)
+            ax.spines['bottom'].set_linewidth(1.5)
 
-        fig.tight_layout(pad=3.0)
+        fig.tight_layout(pad=2.5)
         
         canvas = FigureCanvasTkAgg(fig, master=parent)
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -722,44 +1301,106 @@ class MainWindow(tk.Frame):
         return fig, ax1, ax2, ax3, canvas
 
     def update_plots(self):
-        """Update the main window plots with current data"""
+        """Update the main window plots with current data using modern styling"""
         if not self.controller.is_connected() or not hasattr(self, 'ax1'):
             return  # Skip plot updates if not connected or plots not initialized
 
         try:
+            # Modern colors for plots
+            color_flow1 = '#3498DB'  # Blue
+            color_flow2 = '#2ECC71'  # Green
+            color_actual = '#3498DB'  # Blue
+            color_target = '#E74C3C'  # Red
+            
             # --- Plot Flow 1 ---
             self.ax1.clear()
-            self.ax1.set_title('Flow 1')
-            self.ax1.set_ylabel('ln/min')
-            self.ax1.grid(True, linestyle='--', alpha=0.7)
+            self.ax1.set_title('Base Gas Flow', fontsize=11, fontweight='bold', color=self.colors['primary'], pad=10)
+            self.ax1.set_ylabel('ln/min', fontsize=9, color=self.colors['text'])
+            self.ax1.set_facecolor('#FAFAFA')
+            self.ax1.grid(True, linestyle='--', alpha=0.3, color='#ECF0F1', linewidth=0.8)
+            self.ax1.spines['top'].set_visible(False)
+            self.ax1.spines['right'].set_visible(False)
+            self.ax1.spines['left'].set_color('#BDC3C7')
+            self.ax1.spines['bottom'].set_color('#BDC3C7')
+            
             if self.flow1_data['pv']:
-                self.ax1.plot(self.times, self.flow1_data['pv'], 'b-', label='Measured')
-                self.ax1.legend(loc='best')
+                self.ax1.plot(self.times, self.flow1_data['pv'], color=color_flow1, 
+                            linewidth=2.5, label='Measured', alpha=0.9)
+                self.ax1.fill_between(self.times, self.flow1_data['pv'], alpha=0.1, color=color_flow1)
+                self.ax1.legend(loc='upper right', fontsize=8, framealpha=0.9)
             else:
-                self.ax1.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
-                            verticalalignment='center', transform=self.ax1.transAxes)
+                self.ax1.text(0.5, 0.5, 'Waiting for data...', 
+                            horizontalalignment='center',
+                            verticalalignment='center', 
+                            transform=self.ax1.transAxes,
+                            fontsize=10,
+                            color='#95A5A6')
 
             # --- Plot Flow 2 ---
             self.ax2.clear()
-            self.ax2.set_title('Flow 2')
-            self.ax2.set_ylabel('ln/min')
-            self.ax2.grid(True, linestyle='--', alpha=0.7)
+            self.ax2.set_title('Variable Gas Flow', fontsize=11, fontweight='bold', color=self.colors['primary'], pad=10)
+            self.ax2.set_ylabel('ln/min', fontsize=9, color=self.colors['text'])
+            self.ax2.set_facecolor('#FAFAFA')
+            self.ax2.grid(True, linestyle='--', alpha=0.3, color='#ECF0F1', linewidth=0.8)
+            self.ax2.spines['top'].set_visible(False)
+            self.ax2.spines['right'].set_visible(False)
+            self.ax2.spines['left'].set_color('#BDC3C7')
+            self.ax2.spines['bottom'].set_color('#BDC3C7')
+            
             if self.flow2_data['pv']:
-                self.ax2.plot(self.times, self.flow2_data['pv'], 'g-', label='Measured')
-                self.ax2.legend(loc='best')
+                self.ax2.plot(self.times, self.flow2_data['pv'], color=color_flow2, 
+                            linewidth=2.5, label='Measured', alpha=0.9)
+                self.ax2.fill_between(self.times, self.flow2_data['pv'], alpha=0.1, color=color_flow2)
+                self.ax2.legend(loc='upper right', fontsize=8, framealpha=0.9)
             else:
-                self.ax2.text(0.5, 0.5, 'Waiting for data...', horizontalalignment='center',
-                            verticalalignment='center', transform=self.ax2.transAxes)
+                self.ax2.text(0.5, 0.5, 'Waiting for data...', 
+                            horizontalalignment='center',
+                            verticalalignment='center', 
+                            transform=self.ax2.transAxes,
+                            fontsize=10,
+                            color='#95A5A6')
 
             # --- Plot Concentration ---
             self.ax3.clear()
-            self.ax3.plot(self.times, self.conc_data['actual'], 'b-', label='Actual')
-            self.ax3.plot(self.times, self.conc_data['target'], 'r--', label='Target')
-            self.ax3.set_title('Concentration')
-            self.ax3.set_ylabel('ppm')
-            self.ax3.legend(loc='best')
-            self.ax3.grid(True, linestyle='--', alpha=0.7)
-            self.ax3.set_xlabel('Time')
+            self.ax3.set_title('Concentration with Uncertainty', fontsize=11, fontweight='bold', color=self.colors['primary'], pad=10)
+            self.ax3.set_ylabel('ppm', fontsize=9, color=self.colors['text'])
+            self.ax3.set_xlabel('Time', fontsize=9, color=self.colors['text'])
+            self.ax3.set_facecolor('#FAFAFA')
+            self.ax3.grid(True, linestyle='--', alpha=0.3, color='#ECF0F1', linewidth=0.8)
+            self.ax3.spines['top'].set_visible(False)
+            self.ax3.spines['right'].set_visible(False)
+            self.ax3.spines['left'].set_color('#BDC3C7')
+            self.ax3.spines['bottom'].set_color('#BDC3C7')
+            
+            if self.conc_data['actual'] and len(self.uncertainty_data) > 0:
+                actual_conc = np.array(self.conc_data['actual'])
+                uncertainty = np.array(self.uncertainty_data)
+                
+                # Main line for actual concentration
+                self.ax3.plot(self.times, actual_conc, color=color_actual, 
+                            linewidth=2.5, label='Actual', alpha=0.9, zorder=3)
+                
+                # Target line
+                self.ax3.plot(self.times, self.conc_data['target'], color=color_target, 
+                            linewidth=2, linestyle='--', label='Target', alpha=0.8, zorder=2)
+                
+                # Error band (±1 sigma uncertainty)
+                self.ax3.fill_between(self.times, 
+                                     actual_conc - uncertainty, 
+                                     actual_conc + uncertainty,
+                                     alpha=0.2, color=color_actual, 
+                                     label='±1σ uncertainty',
+                                     zorder=1)
+                
+                self.ax3.legend(loc='upper right', fontsize=8, framealpha=0.9)
+            elif self.conc_data['actual']:
+                # Fallback if uncertainty data not available
+                self.ax3.plot(self.times, self.conc_data['actual'], color=color_actual, 
+                            linewidth=2.5, label='Actual', alpha=0.9)
+                self.ax3.plot(self.times, self.conc_data['target'], color=color_target, 
+                            linewidth=2, linestyle='--', label='Target', alpha=0.8)
+                self.ax3.fill_between(self.times, self.conc_data['actual'], alpha=0.1, color=color_actual)
+                self.ax3.legend(loc='upper right', fontsize=8, framealpha=0.9)
 
             # Use draw_idle() instead of draw() for better performance
             # draw_idle() defers the actual drawing until the GUI is idle

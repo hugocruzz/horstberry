@@ -8,8 +8,18 @@ KNOWN_FLOW_RANGES = {
     8: (0.13604, 10, "mln/min"),
     3: (0.012023, 1.5, "ln/min"),
     5: (1.233, 150, "mln/min"),
-    10: (0.012023, 1.5, "ln/min"),
+    10: (0.000856, 2.5, "ln/min"),  # Helium: 0.856-2500 mL/min = 0.000856-2.5 L/min
     20: (0.012023, 1.5, "ln/min"),
+}
+
+# MFC Uncertainty specifications (based on ±0.5%Rd + ±0.1%FS)
+# Format: {address: {'Rd': reading_error_percent, 'FS': full_scale_error_percent}}
+MFC_UNCERTAINTIES = {
+    8: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 10.0, 'unit': 'mln/min'},      # Low flow: 10 mL/min max
+    3: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 1500.0, 'unit': 'mln/min'},    # High flow: 1500 mL/min max
+    5: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 150.0, 'unit': 'mln/min'},     # Medium flow: 150 mL/min max
+    10: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 2500.0, 'unit': 'mln/min'},   # Helium: 2500 mL/min max
+    20: {'Rd': 0.5, 'FS': 0.1, 'FS_value': 1500.0, 'unit': 'mln/min'},   # Base gas (air): 1500 mL/min max
 }
 
 class FlowController:

@@ -1,0 +1,10 @@
+# Main dependencies for Bronkhorst Flow Controller Interface
+bronkhorst-propar>=1.2.0
+matplotlib>=3.10.0
+numpy>=2.3.0
+
+# Additional dependencies (automatically installed with above packages)
+pyserial>=3.5
+python-dateutil>=2.9.0
+pillow>=12.0.0
+packaging>=25.0

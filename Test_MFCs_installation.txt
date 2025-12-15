@@ -1,0 +1,29 @@
+MFC	Flow(L/min)	measured flow (L/min)	Output location
+Zero	0	0	Table
+Air	0.1 	0.114	Table
+Air	0.3	0.342	Table
+Air	0.5	0.575	Table
+CH4	0.3	0.362	Table
+CH4	0.1	0.120	Table
+CH4	0.1(medium MFC)	0.119	Table
+CH4	.01	0.0116	Table
+CH4	.01 (med)+0.01 (low)	0.0237	Table
+CH4	.001	0.0017	Table
+Mix	0.5+0.1	0.733	Table	
+Mix	0.5+0.01	0.592	Table	
+Mix	0.5+0.001	0.579	Table	
+Mix	0.3+0.01 0.374	Table	Not necessary
+Mix	0.3 0.362	Table
+Mix	0.1+0.3	0.485	Table
+Mix	0.3+0.1	0.485	Table
+He	0.1 	0.169	Table
+He	0.3	0.511	Table
+Air	0.1	0.122	Enceinte
+Air	0.5	0.615	Enceinte
+He	0.1(=0.06 He)	0.115	Enceinte
+He	0.5 (=0.3 He)	0.574	Enceinte
+Mix	0.5+0.1	0.737	Enceinte
+Mix	0.3+0.01	0.377	Enceinte
+Mix	0.1+0.001	0.347	Enceinte
+He	0.1	0.115	Pompe
+He	0.5	0.576	Pompe

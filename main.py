@@ -5,7 +5,7 @@ from src.platform.platform import get_platform
 
 def main():
     root = tk.Tk()
-    root.title("Flow Controller")
+    root.title("Eole SENSE Flow")
     
     platform_interface = get_platform()
     settings = platform_interface.get_display_settings()
