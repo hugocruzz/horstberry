@@ -434,7 +434,7 @@ class MainWindow(tk.Frame):
         com_port_label.pack(side=tk.LEFT, padx=(0, 8))
 
         self.com_port_var = tk.StringVar()
-        ports = [f"COM{i}" for i in range(1, 15)]
+        ports = [f"COM{i}" for i in range(1, 25)]
         self.com_port_dropdown = ttk.Combobox(
             port_frame,
             textvariable=self.com_port_var,
@@ -511,10 +511,12 @@ class MainWindow(tk.Frame):
         ).grid(row=row, column=0, padx=5, pady=8, sticky="w")
         
         self.gas2_address_var = tk.StringVar(value="Not assigned")
+        # Create list of addresses 1-24 plus "Not assigned"
+        address_options = ["Not assigned"] + [str(i) for i in range(1, 25)]
         self.gas2_dropdown = ttk.Combobox(
             self.concentration_frame,
             textvariable=self.gas2_address_var,
-            values=["Not assigned"],
+            values=address_options,
             state="readonly",
             width=14,
             font=('Segoe UI', 10)
@@ -710,15 +712,23 @@ class MainWindow(tk.Frame):
             self.print_to_command_output(f"Base gas (air) auto-assigned to address 20", 'info')
         
         # Update Gas2 dropdown with available addresses (excluding base gas at 20)
-        # Format: "address (name)"
+        # Format: "address (name)" for found instruments, just "address" for others
         # Add "Automatic" as the first option
         address_options = ["Automatic"]
-        for addr in sorted(instruments_metadata.keys()):
-            if addr != 20:  # Exclude base gas from variable gas selection
+        
+        # Add all addresses 1-24 (excluding 20 which is base gas)
+        for addr in range(1, 25):
+            if addr == 20:  # Skip base gas address
+                continue
+            if addr in instruments_metadata:
+                # Found instrument - show with name
                 name = INSTRUMENT_NAMES.get(addr, f"Unknown")
                 address_options.append(f"{addr} ({name})")
+            else:
+                # Not found - just show address number
+                address_options.append(str(addr))
         
-        self.gas2_dropdown['values'] = address_options if len(address_options) > 1 else ["Not assigned"]
+        self.gas2_dropdown['values'] = address_options
         
         # Set "Automatic" as the default selection
         if len(address_options) > 1:
