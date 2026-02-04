@@ -1,0 +1,19 @@
+# Picarro analysis for the bronkhorst mixing setup, 03/02/26
+
+5/6 bags have me made:
+- Bag 1: 100 ppm CH4 (Base gas (air): 0.4 L/min, Low flow (gas): 8.163 mL/min)
+- Bag 2: 100 ppm CH4 (Base gas (air): 0.4 L/min, Low flow (gas): 8.163 mL/min)
+- Bag 3: 100 ppm CO2 (Base gas (air): 0.4 L/min, Low flow (gas): 8.163 mL/min)
+- Bag 4: 0 ppm at the end of the pump
+- Bag/outlet 5: 0 ppm from the lab synthetic air of the RIVER lab
+- Bag 6: 0 ppm Synthetic air from our bottle
+
+Informations: 
+RIVER Picarro setup: CO2 is checked every month, there is no drift. We expect no drift for CH4 as well but it's an assumption.
+
+Conclusion:
+- CH4 100 ppm mix creates bag with less CH4 than expected. 
+- CO2 100 ppm mix indicates around 100 ppm (around 97ppm) but is due to the fact that the synthetic contains around 10 ppm of CO2. Therefore, in both cases, it's a systematic error and the system creates bags with less concentration of mix than expected.
+- Synthetic air from SENSE bottle have hight amount of CO2 isotope
+- Gas from outlet of the Subocean pump is not the gas in the spectrometer, there is an entry of atmospheric air somewhere in the line, probably at the pump head.
+ 

@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from typing import Dict, Any
 from threading import Thread
 from datetime import datetime
@@ -45,6 +45,12 @@ INSTRUMENT_NAMES = {
 
 # Display order from top to bottom
 INSTRUMENT_DISPLAY_ORDER = [20, 3, 5, 8, 10]
+
+# Safety warning shown when stopping one or more MFCs or setting flow to 0.
+STOP_MFCS_WARNING_MESSAGE = (
+    "Are you sure you want to stop the MFCs ? "
+    "Water from the tank may go back into the tube and damage the MFCs"
+)
 
 class MainWindow(tk.Frame):
     def __init__(self, parent: tk.Tk, controller: Any, settings: Dict[str, Any]):
@@ -769,12 +775,19 @@ class MainWindow(tk.Frame):
         if not self.controller.is_connected():
             self.update_status("Please connect and scan for instruments first.", "orange")
             return
+        if not messagebox.askyesno("Warning", STOP_MFCS_WARNING_MESSAGE):
+            self.print_to_command_output("Stop all flows cancelled.", 'info')
+            return
         self.print_to_command_output("Stopping all flows...", 'warning')
         self.controller.stop_all()
     
     def stop_single_flow(self, address: int):
         """Stop flow for a single instrument by setting it to 0."""
         try:
+            if not messagebox.askyesno("Warning", STOP_MFCS_WARNING_MESSAGE):
+                instrument_name = INSTRUMENT_NAMES.get(address, f"Address {address}")
+                self.print_to_command_output(f"Stop cancelled for {instrument_name}.", 'info')
+                return
             self.controller.set_flow(address, 0)
             # Also clear the entry field
             if address in self.flow_entries:
@@ -971,9 +984,54 @@ class MainWindow(tk.Frame):
         """Set the flow for an instrument from its manual entry field."""
         try:
             flow_str = self.flow_entries[address].get()
-            flow = float(flow_str)
-            self.controller.set_flow(address, flow)
-            self.print_to_command_output(f"Manually set flow for address {address} to {flow:.3f}", 'success')
+            flow_entered = float(flow_str)
+
+            metadata = self.controller.get_instrument_metadata(address)
+            unit = str(metadata.get('unit', 'ln/min')).strip()
+            unit_lc = unit.lower()
+            max_flow_native = float(metadata.get('max_flow', 0.0) or 0.0)
+
+            # The entry is displayed in the instrument's native unit.
+            # FlowController.set_flow() expects L/min and converts to native units internally.
+            if 'ml' in unit_lc or 'mln' in unit_lc:
+                flow_native = flow_entered  # mL/min
+                flow_lmin = flow_entered / 1000.0
+            else:
+                flow_native = flow_entered  # L/min
+                flow_lmin = flow_entered
+
+            if abs(flow_native) < 1e-12 and not messagebox.askyesno("Warning", STOP_MFCS_WARNING_MESSAGE):
+                instrument_name = INSTRUMENT_NAMES.get(address, f"Address {address}")
+                self.print_to_command_output(f"Set-to-zero cancelled for {instrument_name}.", 'info')
+                return
+
+            # Sanity check: prevent obvious unit mixups (e.g., entering 100 thinking mL/min but treated as L/min)
+            if max_flow_native > 0 and flow_native > max_flow_native * 1.05:
+                instrument_name = INSTRUMENT_NAMES.get(address, f"Address {address}")
+                self.print_to_command_output(
+                    f"Refusing to set {instrument_name} (addr {address}) to {flow_native:.3f} {unit}: exceeds max {max_flow_native:.3f} {unit}",
+                    'error'
+                )
+                return
+
+            ok = self.controller.set_flow(address, flow_lmin)
+            instrument_name = INSTRUMENT_NAMES.get(address, f"Address {address}")
+            if ok:
+                if 'ml' in unit_lc or 'mln' in unit_lc:
+                    self.print_to_command_output(
+                        f"Manually set {instrument_name} (addr {address}) to {flow_native:.3f} {unit} ({flow_lmin:.6f} L/min)",
+                        'success'
+                    )
+                else:
+                    self.print_to_command_output(
+                        f"Manually set {instrument_name} (addr {address}) to {flow_lmin:.6f} L/min",
+                        'success'
+                    )
+            else:
+                self.print_to_command_output(
+                    f"Failed to set {instrument_name} (addr {address}) to {flow_native:.3f} {unit}",
+                    'error'
+                )
         except ValueError:
             self.print_to_command_output(f"Invalid flow value entered for address {address}: '{flow_str}'", 'error')
         except Exception as e:
