@@ -26,7 +26,7 @@ def main():
     connection_settings = platform_interface.get_connection_settings()
     
     # Initialize FlowController with default port from settings (COM13)
-    default_port = connection_settings.get('port', 'COM13')
+    default_port = connection_settings.get('port', 'COM6')
     flow_controller = FlowController(
         port=default_port,  # Use default port from settings
         addresses=None  # Don't initialize with addresses until scan

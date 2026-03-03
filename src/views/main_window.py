@@ -65,6 +65,9 @@ class MainWindow(tk.Frame):
         # Calibration mode tracking
         self.in_calibration_mode = False
         self.calibration_status_var = tk.StringVar(value="")
+
+        # Calibration window single-instance reference
+        self.calibration_window = None
         
         # Initialize current_gas2_address for automatic mode
         self.current_gas2_address = None
@@ -182,9 +185,9 @@ class MainWindow(tk.Frame):
         self.reading_labels: Dict = {}
         self.status_labels: Dict = {}
         self.variables = {
-            'C_tot_ppm': tk.DoubleVar(value=2), #Around 2ppm in the air 
+            'C_tot_ppm': tk.DoubleVar(value=100),
             'C1_ppm': tk.DoubleVar(value=0),
-            'C2_ppm': tk.DoubleVar(value=5000)
+            'C2_ppm': tk.DoubleVar(value=4980)
         }
         
         # Flag to track if instrument scanning has been completed
@@ -208,8 +211,12 @@ class MainWindow(tk.Frame):
         self.times = []
         self.flow1_data = {'sp': [], 'pv': []}
         self.flow2_data = {'sp': [], 'pv': []}
-        self.conc_data = {'target': [], 'actual': []}  # Add concentration data
+        self.conc_data = {'target': [], 'actual': [], 'theoretical': []}  # theoretical from setpoints
         self.uncertainty_data = []  # Store uncertainty values for plotting
+
+        # Plot options / realtime numeric display
+        self.show_theoretical_var = tk.BooleanVar(value=True)
+        self.last_values_var = tk.StringVar(value="Last values: —")
         
         # Uncertainty tracking
         self.current_uncertainty = {
@@ -414,6 +421,19 @@ class MainWindow(tk.Frame):
             command=self.reset_graphs,
             style='TButton'
         ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Checkbutton(
+            plot_button_frame,
+            text="Show theoretical",
+            variable=self.show_theoretical_var,
+            command=self.update_plots
+        ).pack(side=tk.LEFT, padx=10)
+
+        ttk.Label(
+            plot_button_frame,
+            textvariable=self.last_values_var,
+            font=('Segoe UI', 9)
+        ).pack(side=tk.RIGHT, padx=5)
         
         plot_frame = ttk.Frame(plot_outer_frame)
         plot_frame.pack(fill=tk.BOTH, expand=True)
@@ -452,8 +472,8 @@ class MainWindow(tk.Frame):
         self.com_port_dropdown.pack(side=tk.LEFT, padx=0)
         self.com_port_dropdown.bind("<<ComboboxSelected>>", self.on_com_port_selected)
 
-        # Set default port from settings or controller, defaulting to COM13
-        default_port = self.controller.get_port() or self.settings.get('port', 'COM13')
+        # Set default port from settings or controller, defaulting to COM6
+        default_port = self.controller.get_port() or self.settings.get('port', 'COM6')
         self.com_port_var.set(default_port)
         # Configure controller with the default port if not already set
         if not self.controller.get_port():
@@ -693,7 +713,17 @@ class MainWindow(tk.Frame):
     def open_calibration_window(self):
         """Open the calibration routine window"""
         try:
-            calibration_win = CalibrationWindow(self, self.controller)
+            if self.calibration_window is not None:
+                try:
+                    if self.calibration_window.winfo_exists():
+                        self.calibration_window.deiconify()
+                        self.calibration_window.lift()
+                        self.calibration_window.focus_force()
+                        return
+                except Exception:
+                    self.calibration_window = None
+
+            self.calibration_window = CalibrationWindow(self, self.controller)
             # Don't use grab_set() to allow navigation in main window
         except Exception as e:
             self.print_to_command_output(f"Error opening calibration window: {e}", 'error')
@@ -1209,6 +1239,15 @@ class MainWindow(tk.Frame):
                 self.current_gas2_address = addr2
             
             flows = {addr1: Q1, addr2: Q2}
+
+            # Clear all other flow entries so it's obvious which instruments are active
+            for addr, entry_widget in self.flow_entries.items():
+                if addr not in flows:
+                    try:
+                        entry_widget.delete(0, tk.END)
+                        entry_widget.insert(0, "0")
+                    except Exception:
+                        pass
             
             # Pre-fill the flow entry fields with calculated values
             for addr, flow in flows.items():
@@ -1417,7 +1456,27 @@ class MainWindow(tk.Frame):
             target_conc = self.variables['C_tot_ppm'].get()
             self.conc_data['target'].append(target_conc)
             self.conc_data['actual'].append(actual_conc)
+
+            # Theoretical concentration from setpoints (if available)
+            theoretical_conc = np.nan
+            try:
+                sp1 = self.controller.setpoints.get(address_1)
+                sp2 = self.controller.setpoints.get(address_2)
+                if sp1 is not None and sp2 is not None:
+                    theoretical_conc = calculate_real_outflow(C1, float(sp1), C2, float(sp2))
+            except Exception:
+                theoretical_conc = np.nan
+            self.conc_data['theoretical'].append(theoretical_conc)
             self.uncertainty_data.append(u_C)
+
+            # Update the realtime numeric readout (exact last values)
+            try:
+                self.last_values_var.set(
+                    f"Last values: Base={flow1:.6f} ln/min | Var={flow2:.6f} ln/min | "
+                    f"Conc={actual_conc:.3f} ppm"
+                )
+            except Exception:
+                pass
 
             # Remove print debug info
             # print(f"Added data point: time={now}, flow1={flow1}, flow2={flow2}, conc={actual_conc}")
@@ -1431,6 +1490,7 @@ class MainWindow(tk.Frame):
                 self.flow2_data['pv'] = self.flow2_data['pv'][-max_points:]
                 self.conc_data['target'] = self.conc_data['target'][-max_points:]
                 self.conc_data['actual'] = self.conc_data['actual'][-max_points:]
+                self.conc_data['theoretical'] = self.conc_data['theoretical'][-max_points:]
                 self.uncertainty_data = self.uncertainty_data[-max_points:]
 
         except Exception as e:
@@ -1504,6 +1564,22 @@ class MainWindow(tk.Frame):
                 self.ax1.plot(self.times, self.flow1_data['pv'], color=color_flow1, 
                             linewidth=2.5, label='Measured', alpha=0.9)
                 self.ax1.fill_between(self.times, self.flow1_data['pv'], alpha=0.1, color=color_flow1)
+
+                # Show last value on the plot
+                try:
+                    last_val = float(self.flow1_data['pv'][-1])
+                    self.ax1.text(
+                        0.02,
+                        0.95,
+                        f"Last: {last_val:.6f}",
+                        transform=self.ax1.transAxes,
+                        va='top',
+                        ha='left',
+                        fontsize=9,
+                        color=self.colors['text'],
+                    )
+                except Exception:
+                    pass
                 
                 # Add setpoint line if available
                 address_1 = self.instrument_addresses.get('gas1')
@@ -1536,6 +1612,22 @@ class MainWindow(tk.Frame):
                 self.ax2.plot(self.times, self.flow2_data['pv'], color=color_flow2, 
                             linewidth=2.5, label='Measured', alpha=0.9)
                 self.ax2.fill_between(self.times, self.flow2_data['pv'], alpha=0.1, color=color_flow2)
+
+                # Show last value on the plot
+                try:
+                    last_val = float(self.flow2_data['pv'][-1])
+                    self.ax2.text(
+                        0.02,
+                        0.95,
+                        f"Last: {last_val:.6f}",
+                        transform=self.ax2.transAxes,
+                        va='top',
+                        ha='left',
+                        fontsize=9,
+                        color=self.colors['text'],
+                    )
+                except Exception:
+                    pass
                 
                 # Add setpoint line if available
                 address_2_raw = self.instrument_addresses.get('gas2')
@@ -1573,10 +1665,45 @@ class MainWindow(tk.Frame):
                 # Main line for actual concentration
                 self.ax3.plot(self.times, actual_conc, color=color_actual, 
                             linewidth=2.5, label='Actual', alpha=0.9, zorder=3)
+
+                # Show last value on the plot
+                try:
+                    last_val = float(actual_conc[-1])
+                    self.ax3.text(
+                        0.02,
+                        0.95,
+                        f"Last: {last_val:.3f} ppm",
+                        transform=self.ax3.transAxes,
+                        va='top',
+                        ha='left',
+                        fontsize=9,
+                        color=self.colors['text'],
+                    )
+                except Exception:
+                    pass
                 
                 # Target line
                 self.ax3.plot(self.times, self.conc_data['target'], color=color_target, 
                             linewidth=2, linestyle='--', label='Target', alpha=0.8, zorder=2)
+
+                # Theoretical (calculated) concentration from setpoints (optional)
+                if getattr(self, 'show_theoretical_var', None) is not None and self.show_theoretical_var.get():
+                    theory = np.array(self.conc_data.get('theoretical', []), dtype=float)
+                    if theory.size == len(self.times):
+                        mask = np.isfinite(theory)
+                        if np.any(mask):
+                            t_arr = np.array(self.times, dtype=object)
+                            self.ax3.plot(
+                                t_arr[mask],
+                                theory[mask],
+                                color=color_target,
+                                marker='o',
+                                markersize=3,
+                                linewidth=1.2,
+                                label='Theoretical (setpoints)',
+                                alpha=0.9,
+                                zorder=4,
+                            )
                 
                 # Error band (±1 sigma uncertainty)
                 self.ax3.fill_between(self.times, 
@@ -1593,6 +1720,37 @@ class MainWindow(tk.Frame):
                             linewidth=2.5, label='Actual', alpha=0.9)
                 self.ax3.plot(self.times, self.conc_data['target'], color=color_target, 
                             linewidth=2, linestyle='--', label='Target', alpha=0.8)
+                try:
+                    last_val = float(self.conc_data['actual'][-1])
+                    self.ax3.text(
+                        0.02,
+                        0.95,
+                        f"Last: {last_val:.3f} ppm",
+                        transform=self.ax3.transAxes,
+                        va='top',
+                        ha='left',
+                        fontsize=9,
+                        color=self.colors['text'],
+                    )
+                except Exception:
+                    pass
+                if getattr(self, 'show_theoretical_var', None) is not None and self.show_theoretical_var.get():
+                    theory = np.array(self.conc_data.get('theoretical', []), dtype=float)
+                    if theory.size == len(self.times):
+                        mask = np.isfinite(theory)
+                        if np.any(mask):
+                            t_arr = np.array(self.times, dtype=object)
+                            self.ax3.plot(
+                                t_arr[mask],
+                                theory[mask],
+                                color=color_target,
+                                marker='o',
+                                markersize=3,
+                                linewidth=1.2,
+                                label='Theoretical (setpoints)',
+                                alpha=0.9,
+                                zorder=4,
+                            )
                 self.ax3.fill_between(self.times, self.conc_data['actual'], alpha=0.1, color=color_actual)
                 self.ax3.legend(loc='upper right', fontsize=8, framealpha=0.9)
 
@@ -1609,7 +1767,7 @@ class MainWindow(tk.Frame):
             self.times = []
             self.flow1_data = {'pv': []}
             self.flow2_data = {'pv': []}
-            self.conc_data = {'target': [], 'actual': []}
+            self.conc_data = {'target': [], 'actual': [], 'theoretical': []}
             self.uncertainty_data = []
             
             # Clear all three axes

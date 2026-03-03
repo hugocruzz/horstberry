@@ -1,6 +1,7 @@
 {
   "directory": "c:\\Users\\cruz\\Documents\\SENSE\\horstberry\\calibration_file",
-  "input_concentration": "5000",
+  "base_concentration": "0.0",
+  "input_concentration": "4980.0",
   "total_flow": "1.0",
   "flow_unit": "L/min",
   "step_number": "11",

@@ -31,6 +31,7 @@ class CalibrationWindow(tk.Toplevel):
         
         # Variables with saved/default values
         self.directory_var = tk.StringVar(value=saved_settings.get('directory', self.default_calib_dir))
+        self.base_concentration_var = tk.StringVar(value=saved_settings.get('base_concentration', '0'))
         self.input_concentration_var = tk.StringVar(value=saved_settings.get('input_concentration', '5000'))
         self.total_flow_var = tk.StringVar(value=saved_settings.get('total_flow', '1.0'))
         self.flow_unit_var = tk.StringVar(value=saved_settings.get('flow_unit', 'L/min'))
@@ -56,6 +57,14 @@ class CalibrationWindow(tk.Toplevel):
         self.addr_mix_med = tk.IntVar(value=saved_settings.get('addr_mix_med', 5))  # Default: medium flow at 5
         self.addr_mix_low = tk.IntVar(value=saved_settings.get('addr_mix_low', 8))  # Default: low flow at 8
         self.addr_helium = tk.IntVar(value=saved_settings.get('addr_helium', 10))  # Default: helium at 10
+
+        # Two-way sync flags (avoid recursion)
+        self._syncing_from_main = False
+        self._syncing_to_main = False
+
+        # Pull initial values from main window if available
+        self._sync_from_main_window_initial()
+        self._setup_two_way_sync_with_main_window()
         
         self.setup_gui()
         self.update_step_preview()
@@ -95,6 +104,13 @@ class CalibrationWindow(tk.Toplevel):
                   command=self.select_directory).grid(row=0, column=1)
         row += 1
         
+        # Base gas concentration
+        ttk.Label(left_frame, text="Base Gas Concentration (ppm):", 
+             font=('Segoe UI', 9)).grid(row=row, column=0, sticky=tk.W, pady=(3, 3))
+        ttk.Entry(left_frame, textvariable=self.base_concentration_var, 
+             width=20).grid(row=row, column=1, sticky=tk.W, pady=(3, 3))
+        row += 1
+
         # Input gas concentration
         ttk.Label(left_frame, text="Input Gas Concentration (ppm):", 
                  font=('Segoe UI', 9)).grid(row=row, column=0, sticky=tk.W, pady=(3, 3))
@@ -217,15 +233,7 @@ class CalibrationWindow(tk.Toplevel):
                        command=self.update_step_preview).grid(row=row, column=0, columnspan=2, 
                                                               sticky=tk.W, pady=(5, 0))
         row += 1
-        
-        # Update button (recalculates steps based on current configuration)
-        ttk.Button(left_frame, text="🔄 Update Step Preview", 
-                  command=self.update_step_preview).grid(row=row, column=0, columnspan=2, 
-                                                         pady=(10, 5))
-        ttk.Label(left_frame, text="(Recalculates steps based on current settings)", 
-                 font=('Segoe UI', 8, 'italic'), foreground='#7F8C8D').grid(
-                     row=row+1, column=0, columnspan=2, pady=(0, 5))
-        row += 2
+        row += 0
         
         # Separator before action buttons
         ttk.Separator(left_frame, orient='horizontal').grid(
@@ -307,6 +315,8 @@ class CalibrationWindow(tk.Toplevel):
         self.initial_conc_var.trace('w', lambda *args: self.update_step_preview())
         self.final_conc_var.trace('w', lambda *args: self.update_step_preview())
         self.step_number_var.trace('w', lambda *args: self.update_step_preview())
+        self.base_concentration_var.trace('w', lambda *args: self.update_step_preview())
+        self.input_concentration_var.trace('w', lambda *args: self.update_step_preview())
         
     def select_directory(self):
         """Open directory selection dialog"""
@@ -347,6 +357,29 @@ class CalibrationWindow(tk.Toplevel):
                 initial = float(self.initial_conc_var.get())
                 final = float(self.final_conc_var.get())
                 num_steps = int(self.step_number_var.get())
+
+                # Enforce achievable range based on source concentrations
+                try:
+                    base_conc = float(self.base_concentration_var.get())
+                except Exception:
+                    base_conc = 0.0
+                try:
+                    input_conc = float(self.input_concentration_var.get())
+                except Exception:
+                    input_conc = 0.0
+
+                achievable_min = min(base_conc, input_conc)
+                achievable_max = max(base_conc, input_conc)
+
+                # Clamp and reflect back to UI (avoid recursive storms using a best-effort guard)
+                clamped_initial = max(achievable_min, min(initial, achievable_max))
+                clamped_final = max(achievable_min, min(final, achievable_max))
+                if clamped_initial != initial:
+                    self.initial_conc_var.set(str(clamped_initial))
+                    initial = clamped_initial
+                if clamped_final != final:
+                    self.final_conc_var.set(str(clamped_final))
+                    final = clamped_final
                 
                 if num_steps < 2:
                     self.computed_steps = [initial]
@@ -420,11 +453,24 @@ class CalibrationWindow(tk.Toplevel):
             return
             
         try:
+            base_conc = float(self.base_concentration_var.get())
             input_conc = float(self.input_concentration_var.get())
             total_flow = float(self.total_flow_var.get())
             step_duration = float(self.step_duration_var.get())
         except ValueError:
             messagebox.showerror("Error", "Invalid numeric values in configuration.")
+            return
+
+        # Enforce achievable concentration range
+        achievable_min = min(base_conc, input_conc)
+        achievable_max = max(base_conc, input_conc)
+        out_of_range = [c for c in self.computed_steps if c < achievable_min - 1e-9 or c > achievable_max + 1e-9]
+        if out_of_range:
+            messagebox.showerror(
+                "Error",
+                f"Some steps are outside the achievable range [{achievable_min:.3f}, {achievable_max:.3f}] ppm.\n\n"
+                f"If base gas is not 0 ppm, you cannot generate 0 ppm."
+            )
             return
         
         # Convert flow unit to L/min if needed
@@ -496,6 +542,12 @@ class CalibrationWindow(tk.Toplevel):
                 f.write("Step,Target_Conc_ppm,Actual_Conc_ppm,Base_Flow_Lmin,Variable_Flow_Lmin,Variable_Instrument,Timestamp\n")
             
             duration_seconds = self._convert_duration_to_seconds(step_duration, self.duration_unit_var.get())
+
+            # Keep base concentration stable during a run
+            try:
+                base_conc = float(self.base_concentration_var.get())
+            except Exception:
+                base_conc = 0.0
             
             for step_num, target_conc in enumerate(self.computed_steps, 1):
                 if not self.is_running:
@@ -512,134 +564,96 @@ class CalibrationWindow(tk.Toplevel):
                     self.parent_window.print_to_command_output(
                         f"Calibration Step {step_num}/{len(self.computed_steps)}: {target_conc:.2f} ppm", 'info'
                     )
+
+                # Sync concentrations back to main window controls (so you see live targets)
+                if hasattr(self.parent_window, 'variables') and isinstance(getattr(self.parent_window, 'variables', None), dict):
+                    try:
+                        self.parent_window.variables['C_tot_ppm'].set(float(target_conc))
+                        self.parent_window.variables['C1_ppm'].set(float(base_conc))
+                        self.parent_window.variables['C2_ppm'].set(float(input_conc))
+                    except Exception:
+                        pass
                 
                 # Calculate required flows
                 try:
-                    # Special handling for 0 ppm - use only neutral gas
-                    if target_conc <= 0.1:  # Near zero concentration
-                        Q_air = total_flow  # All neutral gas (air)
-                        Q_methane = 0  # No variable gas (methane)
-                        addr_neutral = self.addr_neutral.get()
-                        addr_mix = None
-                        
-                        # Set only neutral gas flow
-                        self.controller.set_flow(addr_neutral, Q_air)
-                        # Stop all mix gas instruments
-                        for addr in [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]:
-                            self.controller.set_flow(addr, 0)
-                        
-                        # Store for data logging
-                        addr_base = addr_neutral
-                        addr_variable = None
-                        Q1 = Q_air
-                        Q2 = 0
-                        
-                        if hasattr(self.parent_window, 'print_to_command_output'):
-                            self.parent_window.print_to_command_output(
-                                f"  Flows set: Air (addr {addr_neutral})={Q_air:.3f} L/min, Methane=0 L/min", 'info'
-                            )
-                    else:
-                        # Normal calculation for non-zero concentrations
-                        from ..models.calculations import calculate_flows_variable
-                        
-                        # Q1 is for C1 (input gas = methane at 5000ppm)
-                        # Q2 is for C2 (air = 0ppm)
-                        Q_methane, Q_air = calculate_flows_variable(
-                            target_conc,
-                            input_conc,  # C1 = methane concentration
-                            0,  # C2 = air (0 ppm)
-                            total_flow
-                        )
-                        
-                        if hasattr(self.parent_window, 'print_to_command_output'):
-                            self.parent_window.print_to_command_output(
-                                f"  Calculated flows: Methane={Q_methane:.6f} L/min, Air={Q_air:.6f} L/min", 'info'
-                            )
-                        
-                        # Get neutral gas (air) address
-                        addr_neutral = self.addr_neutral.get()
-                        
-                        # Use automatic selection for mix gas (methane) from configured addresses
-                        available_addrs = [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]
-                        
-                        if hasattr(self.parent_window, 'print_to_command_output'):
-                            self.parent_window.print_to_command_output(
-                                f"  Selecting instrument for methane flow {Q_methane:.6f} L/min from addresses {available_addrs}", 'info'
-                            )
-                        
+                    from ..models.calculations import calculate_flows_for_total_flow
+
+                    # Compute flows for a fixed total flow
+                    Q_base, Q_input = calculate_flows_for_total_flow(
+                        float(target_conc),
+                        float(base_conc),
+                        float(input_conc),
+                        float(total_flow)
+                    )
+
+                    # Get neutral gas (base) address
+                    addr_neutral = self.addr_neutral.get()
+                    available_addrs = [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]
+
+                    # Select an instrument for the input gas (may be 0)
+                    addr_mix = None
+                    if Q_input > 0:
                         if hasattr(self.parent_window, 'select_best_instrument_for_flow'):
-                            # Call the selection method
-                            addr_mix = self.parent_window.select_best_instrument_for_flow(Q_methane)
-                            
-                            if hasattr(self.parent_window, 'print_to_command_output'):
-                                self.parent_window.print_to_command_output(
-                                    f"  Selection returned: address {addr_mix}", 'info'
-                                )
-                            
-                            # Update current_gas2_address for automatic mode monitoring
+                            addr_mix = self.parent_window.select_best_instrument_for_flow(Q_input)
                             if hasattr(self.parent_window, 'current_gas2_address'):
                                 self.parent_window.current_gas2_address = addr_mix
-                            
-                            # Verify the selected address is in the configured mix addresses
-                            if addr_mix is None:
-                                if hasattr(self.parent_window, 'print_to_command_output'):
-                                    self.parent_window.print_to_command_output(
-                                        f"Warning: No suitable instrument found for {Q_methane:.6f} L/min, skipping step", 'warning'
-                                    )
-                                continue
-                            elif addr_mix not in available_addrs:
-                                if hasattr(self.parent_window, 'print_to_command_output'):
-                                    self.parent_window.print_to_command_output(
-                                        f"Warning: Selected address {addr_mix} not in configured mix addresses {available_addrs}, using fallback", 'warning'
-                                    )
-                                # Use the first available address as fallback
+                            if addr_mix not in available_addrs:
                                 addr_mix = available_addrs[0]
                         else:
-                            # Fallback to high flow if selection method not available
                             addr_mix = self.addr_mix_high.get()
-                            if hasattr(self.parent_window, 'print_to_command_output'):
-                                self.parent_window.print_to_command_output(
-                                    f"  Using fallback: address {addr_mix}", 'info'
-                                )
-                        
-                        # Set flows: neutral gas (air) and mix gas (methane)
-                        self.controller.set_flow(addr_neutral, Q_air)
-                        self.controller.set_flow(addr_mix, Q_methane)
-                        
-                        # Stop other mix gas instruments
-                        for addr in available_addrs:
-                            if addr != addr_mix:
-                                self.controller.set_flow(addr, 0)
-                        
-                        # Store for data logging
-                        addr_base = addr_neutral
-                        addr_variable = addr_mix
-                        Q1 = Q_air  # Neutral gas flow
-                        Q2 = Q_methane  # Mix gas flow
-                        
-                        if hasattr(self.parent_window, 'print_to_command_output'):
-                            self.parent_window.print_to_command_output(
-                                f"  Flows set: Air (addr {addr_neutral})={Q_air:.3f} L/min, Methane (addr {addr_mix})={Q_methane:.3f} L/min", 'info'
+
+                    # Apply flows
+                    self.controller.set_flow(addr_neutral, Q_base)
+                    if addr_mix is not None:
+                        self.controller.set_flow(addr_mix, Q_input)
+
+                    # Stop other mix gas instruments
+                    for addr in available_addrs:
+                        if addr_mix is None or addr != addr_mix:
+                            self.controller.set_flow(addr, 0)
+
+                    # Store for data logging
+                    addr_base = addr_neutral
+                    addr_variable = addr_mix
+                    Q1 = Q_base
+                    Q2 = Q_input
+
+                    if hasattr(self.parent_window, 'print_to_command_output'):
+                        mix_addr_str = str(addr_mix) if addr_mix is not None else "None"
+                        self.parent_window.print_to_command_output(
+                            f"  Flows set: Base (addr {addr_neutral})={Q_base:.6f} L/min, Input (addr {mix_addr_str})={Q_input:.6f} L/min",
+                            'info'
+                        )
+                    
+                    # Log one value per second (resolution point)
+                    start_t = time.time()
+                    next_sample_t = start_t
+                    while self.is_running and (time.time() - start_t) < duration_seconds:
+                        now_t = time.time()
+                        if now_t < next_sample_t:
+                            time.sleep(min(0.2, next_sample_t - now_t))
+                            continue
+
+                        # Read actual values
+                        actual_flow1 = self.controller.read_flow(addr_base) or 0
+                        actual_flow2 = 0
+                        if addr_variable is not None:
+                            actual_flow2 = self.controller.read_flow(addr_variable) or 0
+
+                        # Calculate actual concentration
+                        if (actual_flow1 + actual_flow2) > 0:
+                            actual_conc = (base_conc * actual_flow1 + input_conc * actual_flow2) / (actual_flow1 + actual_flow2)
+                        else:
+                            actual_conc = 0
+
+                        # Log to file
+                        with open(log_file, 'a') as f:
+                            f.write(
+                                f"{step_num},{target_conc:.2f},{actual_conc:.2f},"
+                                f"{actual_flow1:.4f},{actual_flow2:.4f},{addr_variable or 0},{datetime.now().isoformat()}\n"
                             )
-                    
-                    # Wait for stabilization and log data
-                    time.sleep(duration_seconds)
-                    
-                    # Read actual values
-                    actual_flow1 = self.controller.read_flow(addr_base) or 0
-                    actual_flow2 = 0
-                    if addr_variable is not None:
-                        actual_flow2 = self.controller.read_flow(addr_variable) or 0
-                    
-                    # Calculate actual concentration
-                    if (actual_flow1 + actual_flow2) > 0:
-                        actual_conc = (input_conc * actual_flow2) / (actual_flow1 + actual_flow2)
-                    else:
-                        actual_conc = 0
-                    
-                    # Log to file
-                    with open(log_file, 'a') as f:
-                        f.write(f"{step_num},{target_conc:.2f},{actual_conc:.2f},{actual_flow1:.4f},{actual_flow2:.4f},{addr_variable or 0},{datetime.now().isoformat()}\n")
+
+                        next_sample_t += 1.0
                     
                 except Exception as e:
                     if hasattr(self.parent_window, 'print_to_command_output'):
@@ -701,6 +715,7 @@ class CalibrationWindow(tk.Toplevel):
         """Save current settings to file"""
         settings = {
             'directory': self.directory_var.get(),
+            'base_concentration': self.base_concentration_var.get(),
             'input_concentration': self.input_concentration_var.get(),
             'total_flow': self.total_flow_var.get(),
             'flow_unit': self.flow_unit_var.get(),
@@ -745,6 +760,13 @@ class CalibrationWindow(tk.Toplevel):
         if hasattr(self.parent_window, 'in_calibration_mode'):
             self.parent_window.in_calibration_mode = False
             self.parent_window.calibration_status_var.set("")
+
+        # Allow reopening a fresh calibration window later
+        if hasattr(self.parent_window, 'calibration_window'):
+            try:
+                self.parent_window.calibration_window = None
+            except Exception:
+                pass
         
         self.destroy()
     
@@ -765,6 +787,7 @@ class CalibrationWindow(tk.Toplevel):
                 with open(filename, 'w') as f:
                     f.write("=== Calibration Routine Configuration ===\n\n")
                     f.write(f"Data Directory: {self.directory_var.get()}\n")
+                    f.write(f"Base Gas Concentration: {self.base_concentration_var.get()} ppm\n")
                     f.write(f"Input Gas Concentration: {self.input_concentration_var.get()} ppm\n")
                     f.write(f"Total Flow: {self.total_flow_var.get()} {self.flow_unit_var.get()}\n")
                     f.write(f"Step Duration: {self.step_duration_var.get()} {self.duration_unit_var.get()}\n")
@@ -776,6 +799,88 @@ class CalibrationWindow(tk.Toplevel):
                 messagebox.showinfo("Success", f"Configuration exported to:\n{filename}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export configuration:\n{str(e)}")
+
+
+    def _sync_from_main_window_initial(self) -> None:
+        """Seed calibration concentrations from the main window (if available)."""
+        if not hasattr(self.parent_window, 'variables'):
+            return
+        vars_dict = getattr(self.parent_window, 'variables', None)
+        if not isinstance(vars_dict, dict):
+            return
+        try:
+            c1 = float(vars_dict['C1_ppm'].get())
+            c2 = float(vars_dict['C2_ppm'].get())
+        except Exception:
+            return
+
+        self._syncing_from_main = True
+        try:
+            self.base_concentration_var.set(str(c1))
+            self.input_concentration_var.set(str(c2))
+            achievable_min = min(c1, c2)
+            try:
+                initial = float(self.initial_conc_var.get())
+            except Exception:
+                initial = achievable_min
+            if initial < achievable_min:
+                self.initial_conc_var.set(str(achievable_min))
+        finally:
+            self._syncing_from_main = False
+
+
+    def _setup_two_way_sync_with_main_window(self) -> None:
+        """Two-way sync between this window and MainWindow for base/input concentrations."""
+        if not hasattr(self.parent_window, 'variables'):
+            return
+        vars_dict = getattr(self.parent_window, 'variables', None)
+        if not isinstance(vars_dict, dict):
+            return
+
+        def parse_float(value) -> float | None:
+            try:
+                return float(str(value).strip())
+            except Exception:
+                return None
+
+        def push_to_main(*_):
+            if self._syncing_from_main:
+                return
+            self._syncing_to_main = True
+            try:
+                base = parse_float(self.base_concentration_var.get())
+                inp = parse_float(self.input_concentration_var.get())
+                if base is not None:
+                    vars_dict['C1_ppm'].set(base)
+                if inp is not None:
+                    vars_dict['C2_ppm'].set(inp)
+            finally:
+                self._syncing_to_main = False
+
+        def pull_from_main(*_):
+            if self._syncing_to_main:
+                return
+            self._syncing_from_main = True
+            try:
+                base = parse_float(vars_dict['C1_ppm'].get())
+                inp = parse_float(vars_dict['C2_ppm'].get())
+                if base is not None:
+                    self.base_concentration_var.set(str(base))
+                if inp is not None:
+                    self.input_concentration_var.set(str(inp))
+            finally:
+                self._syncing_from_main = False
+
+        # Calibration -> Main
+        self.base_concentration_var.trace_add('write', push_to_main)
+        self.input_concentration_var.trace_add('write', push_to_main)
+
+        # Main -> Calibration
+        try:
+            vars_dict['C1_ppm'].trace_add('write', pull_from_main)
+            vars_dict['C2_ppm'].trace_add('write', pull_from_main)
+        except Exception:
+            pass
 
 
 class ManualStepDialog(tk.Toplevel):

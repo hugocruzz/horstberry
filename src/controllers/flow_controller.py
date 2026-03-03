@@ -213,11 +213,7 @@ class FlowController:
         """Calculate required flows based on concentrations and adjust for units"""
         try:
             # Calculate flows in ln/min
-            Q1, Q2 = calculate_flows_variable(C_tot_ppm, C1_ppm, C2_ppm)
-            
-            # Scale flows based on max_flow
-            Q1 = min(Q1, max_flow)
-            Q2 = min(Q2, max_flow)
+            Q1, Q2 = calculate_flows_variable(C_tot_ppm, C1_ppm, C2_ppm, Q_max_individual=max_flow)
             
             # Adjust flows based on the unit of each instrument
             flows = {}
