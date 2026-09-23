@@ -498,6 +498,7 @@ class MainWindow(tk.Frame):
         )
         self.calibration_button.pack(fill="x", pady=(0, 0))
 
+
     def setup_concentration_panel(self, parent):
         """Sets up the concentration control panel with modern styling."""
         self.concentration_frame = ttk.LabelFrame(

@@ -6,6 +6,7 @@ import json
 import time
 from threading import Thread
 from datetime import datetime
+from ..models.calculations import calculate_flows_for_total_flow
 
 
 class CalibrationWindow(tk.Toplevel):
@@ -57,6 +58,10 @@ class CalibrationWindow(tk.Toplevel):
         self.addr_mix_med = tk.IntVar(value=saved_settings.get('addr_mix_med', 5))  # Default: medium flow at 5
         self.addr_mix_low = tk.IntVar(value=saved_settings.get('addr_mix_low', 8))  # Default: low flow at 8
         self.addr_helium = tk.IntVar(value=saved_settings.get('addr_helium', 10))  # Default: helium at 10
+        # Characterization is part of this routine: use a particular CH4 MFC or
+        # let the routine choose one that can actually deliver the required flow.
+        self.mfc_selection_mode_var = tk.StringVar(value=saved_settings.get('mfc_selection_mode', 'automatic'))
+        self.selected_ch4_mfc_var = tk.IntVar(value=saved_settings.get('selected_ch4_mfc', 8))
 
         # Two-way sync flags (avoid recursion)
         self._syncing_from_main = False
@@ -93,7 +98,7 @@ class CalibrationWindow(tk.Toplevel):
         ttk.Label(left_frame, text="Data Directory:", font=('Segoe UI', 9, 'bold')).grid(
             row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
         row += 1
-        
+
         dir_frame = ttk.Frame(left_frame)
         dir_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 8))
         dir_frame.columnconfigure(0, weight=1)
@@ -102,6 +107,18 @@ class CalibrationWindow(tk.Toplevel):
                  width=40).grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
         ttk.Button(dir_frame, text="...", width=3, 
                   command=self.select_directory).grid(row=0, column=1)
+        row += 1
+
+        selection_frame = ttk.LabelFrame(left_frame, text="CH4 MFC Selection", padding="6")
+        selection_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(3, 6))
+        ttk.Radiobutton(selection_frame, text="Automatic (select a capable CH4 MFC)",
+                        variable=self.mfc_selection_mode_var, value="automatic").grid(row=0, column=0, columnspan=2, sticky=tk.W)
+        ttk.Radiobutton(selection_frame, text="Specific address:",
+                        variable=self.mfc_selection_mode_var, value="specific").grid(row=1, column=0, sticky=tk.W, pady=(4, 0))
+        ttk.Spinbox(selection_frame, textvariable=self.selected_ch4_mfc_var, from_=1, to=24,
+                    width=4).grid(row=1, column=1, sticky=tk.W, padx=(5, 0), pady=(4, 0))
+        ttk.Label(selection_frame, text="Specific mode keeps the same MFC for every step.",
+                  font=('Segoe UI', 8, 'italic')).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(3, 0))
         row += 1
         
         # Base gas concentration
@@ -477,6 +494,12 @@ class CalibrationWindow(tk.Toplevel):
         flow_unit = self.flow_unit_var.get()
         if "mL/min" in flow_unit or "sccm" in flow_unit:
             total_flow = total_flow / 1000  # Convert mL/min to L/min
+
+        try:
+            self._validate_run_flow_ranges(base_conc, input_conc, total_flow)
+        except ValueError as error:
+            messagebox.showerror("MFC range validation", str(error))
+            return
         
         # Confirm before starting
         response = messagebox.askyesno(
@@ -499,7 +522,7 @@ class CalibrationWindow(tk.Toplevel):
             # Start calibration in separate thread
             self.is_running = True
             self.calibration_thread = Thread(target=self._run_calibration, 
-                                            args=(input_conc, total_flow, step_duration), 
+                                            args=(input_conc, total_flow, step_duration),
                                             daemon=True)
             self.calibration_thread.start()
             
@@ -530,6 +553,95 @@ class CalibrationWindow(tk.Toplevel):
                     )
                     self.parent_window.in_calibration_mode = False
                     self.parent_window.calibration_status_var.set("")
+
+    def _flow_is_within_range(self, address: int, flow_lmin: float, label: str, target: float):
+        """Raise a clear error when a non-zero setpoint is outside an MFC range."""
+        metadata = self.controller.get_instrument_metadata(address)
+        unit = str(metadata.get('unit', 'ln/min'))
+        min_native = float(metadata.get('min_flow', 0.0) or 0.0)
+        max_native = float(metadata.get('max_flow', 0.0) or 0.0)
+        native = flow_lmin * 1000.0 if 'ml' in unit.lower() else flow_lmin
+        if native > 1e-12 and native < min_native - 1e-12:
+            raise ValueError(
+                f"{label} (address {address}) needs {native:.6g} {unit} at {target:g} ppm, "
+                f"below its minimum usable flow of {min_native:.6g} {unit}. "
+                "Change the total flow, target range, or MFC selection."
+            )
+        if max_native > 0 and native > max_native + 1e-12:
+            raise ValueError(
+                f"{label} (address {address}) needs {native:.6g} {unit} at {target:g} ppm, "
+                f"above its maximum flow of {max_native:.6g} {unit}."
+            )
+
+    def _validate_run_flow_ranges(self, base_conc: float, input_conc: float, total_flow: float):
+        """Validate air (20) and CH4 MFC capacity before any flow is applied."""
+        air_address = self.addr_neutral.get()
+        candidates = [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]
+        specific = self.mfc_selection_mode_var.get() == 'specific'
+        if specific:
+            candidates = [self.selected_ch4_mfc_var.get()]
+        required = {air_address}
+        if specific:
+            required.add(candidates[0])
+        missing = required.difference(self.controller.instruments)
+        if missing:
+            raise ValueError("Required connected MFC address(es): {}.".format(", ".join(map(str, sorted(missing)))))
+        if not specific:
+            candidates = [address for address in candidates if address in self.controller.instruments]
+            if not candidates:
+                raise ValueError("No configured CH4 MFC (high, medium, or low) is connected.")
+        for target in self.computed_steps:
+            q_air, q_ch4 = calculate_flows_for_total_flow(target, base_conc, input_conc, total_flow)
+            self._flow_is_within_range(air_address, q_air, 'Air MFC', target)
+            if q_ch4 <= 1e-12:
+                continue
+            if specific:
+                self._flow_is_within_range(candidates[0], q_ch4, 'Selected CH4 MFC', target)
+                continue
+            capable = False
+            for address in candidates:
+                try:
+                    self._flow_is_within_range(address, q_ch4, 'CH4 MFC', target)
+                    capable = True
+                    break
+                except ValueError:
+                    continue
+            if not capable:
+                raise ValueError(
+                    f"No configured CH4 MFC can deliver {q_ch4:.6g} L/min at {target:g} ppm. "
+                    "Change the total flow, target range, or connect/select another MFC."
+                )
+
+    def _select_capable_ch4_mfc(self, flow_lmin: float, target: float) -> Optional[int]:
+        """Return the first connected configured CH4 MFC that is in range."""
+        for address in (self.addr_mix_low.get(), self.addr_mix_med.get(), self.addr_mix_high.get()):
+            if address not in self.controller.instruments:
+                continue
+            try:
+                self._flow_is_within_range(address, flow_lmin, 'CH4 MFC', target)
+                return address
+            except ValueError:
+                continue
+        return None
+
+    def _apply_calibration_flows(self, air_address: int, air_flow: float,
+                                 ch4_address: Optional[int], ch4_flow: float):
+        """Isolate the active calibration path by closing every other MFC."""
+        active_flows = {}
+        if air_flow > 1e-12:
+            active_flows[air_address] = air_flow
+        if ch4_address is not None and ch4_flow > 1e-12:
+            active_flows[ch4_address] = ch4_flow
+
+        # Clear stale setpoints first.  Use all scanned/connected instruments,
+        # not just the configured CH4 list: this also closes helium or a newly
+        # connected MFC that must not contribute during the calibration.
+        for address in self.controller.instruments:
+            if address not in active_flows and not self.controller.set_flow(address, 0.0):
+                raise RuntimeError(f"Could not close MFC at address {address}.")
+        for address, flow in active_flows.items():
+            if not self.controller.set_flow(address, flow):
+                raise RuntimeError(f"Could not set MFC at address {address} to {flow:.6g} L/min.")
     
     def _run_calibration(self, input_conc: float, total_flow: float, step_duration: float):
         """Run the calibration routine in a separate thread"""
@@ -539,7 +651,7 @@ class CalibrationWindow(tk.Toplevel):
             log_file = os.path.join(self.directory_var.get(), f"calibration_{timestamp}.csv")
             
             with open(log_file, 'w') as f:
-                f.write("Step,Target_Conc_ppm,Actual_Conc_ppm,Base_Flow_Lmin,Variable_Flow_Lmin,Variable_Instrument,Timestamp\n")
+                f.write("Step,Target_Conc_ppm,Actual_Conc_ppm,Air_MFC_Address,Air_Setpoint_Lmin,Air_PV_Raw,CH4_Setpoint_Lmin,CH4_PV_Raw,CH4_MFC_Address,Timestamp\n")
             
             duration_seconds = self._convert_duration_to_seconds(step_duration, self.duration_unit_var.get())
 
@@ -576,8 +688,6 @@ class CalibrationWindow(tk.Toplevel):
                 
                 # Calculate required flows
                 try:
-                    from ..models.calculations import calculate_flows_for_total_flow
-
                     # Compute flows for a fixed total flow
                     Q_base, Q_input = calculate_flows_for_total_flow(
                         float(target_conc),
@@ -588,29 +698,22 @@ class CalibrationWindow(tk.Toplevel):
 
                     # Get neutral gas (base) address
                     addr_neutral = self.addr_neutral.get()
-                    available_addrs = [self.addr_mix_high.get(), self.addr_mix_med.get(), self.addr_mix_low.get()]
-
-                    # Select an instrument for the input gas (may be 0)
+                    # Select an instrument for the input gas (may be 0). Specific
+                    # mode is the former characterization workflow, embedded here.
                     addr_mix = None
                     if Q_input > 0:
-                        if hasattr(self.parent_window, 'select_best_instrument_for_flow'):
-                            addr_mix = self.parent_window.select_best_instrument_for_flow(Q_input)
+                        if self.mfc_selection_mode_var.get() == 'specific':
+                            addr_mix = self.selected_ch4_mfc_var.get()
+                        else:
+                            addr_mix = self._select_capable_ch4_mfc(Q_input, target_conc)
                             if hasattr(self.parent_window, 'current_gas2_address'):
                                 self.parent_window.current_gas2_address = addr_mix
-                            if addr_mix not in available_addrs:
-                                addr_mix = available_addrs[0]
-                        else:
-                            addr_mix = self.addr_mix_high.get()
+                            if addr_mix is None:
+                                raise RuntimeError("No connected configured CH4 MFC can deliver this step.")
 
-                    # Apply flows
-                    self.controller.set_flow(addr_neutral, Q_base)
-                    if addr_mix is not None:
-                        self.controller.set_flow(addr_mix, Q_input)
-
-                    # Stop other mix gas instruments
-                    for addr in available_addrs:
-                        if addr_mix is None or addr != addr_mix:
-                            self.controller.set_flow(addr, 0)
+                    # Close every non-active connected MFC, then apply the
+                    # only permitted flows for this step (air and/or one CH4 MFC).
+                    self._apply_calibration_flows(addr_neutral, Q_base, addr_mix, Q_input)
 
                     # Store for data logging
                     addr_base = addr_neutral
@@ -649,8 +752,8 @@ class CalibrationWindow(tk.Toplevel):
                         # Log to file
                         with open(log_file, 'a') as f:
                             f.write(
-                                f"{step_num},{target_conc:.2f},{actual_conc:.2f},"
-                                f"{actual_flow1:.4f},{actual_flow2:.4f},{addr_variable or 0},{datetime.now().isoformat()}\n"
+                                f"{step_num},{target_conc:.2f},{actual_conc:.2f},{addr_base},{Q1:.8f},{actual_flow1:.8f},"
+                                f"{Q2:.8f},{actual_flow2:.8f},{addr_variable or 0},{datetime.now().isoformat()}\n"
                             )
 
                         next_sample_t += 1.0
@@ -731,6 +834,8 @@ class CalibrationWindow(tk.Toplevel):
             'addr_mix_med': self.addr_mix_med.get(),
             'addr_mix_low': self.addr_mix_low.get(),
             'addr_helium': self.addr_helium.get()
+            ,'mfc_selection_mode': self.mfc_selection_mode_var.get(),
+            'selected_ch4_mfc': self.selected_ch4_mfc_var.get()
         }
         try:
             with open(self.settings_file, 'w') as f:

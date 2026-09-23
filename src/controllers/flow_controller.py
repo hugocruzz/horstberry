@@ -262,9 +262,12 @@ class FlowController:
         """Read valve position in %"""
         try:
             valve = self.instruments[address].read(33, 1, propar.PP_TYPE_FLOAT)
+            # Preserve an observable value in the console when diagnosing a
+            # device that reports a constant valve position.
+            print(f"Valve diagnostic - address {address}: raw value={valve!r} (process 33, parameter 1)")
             return valve
         except Exception as e:
-            print(f"Error reading valve: {address}")
+            print(f"Valve diagnostic error - address {address}, process 33, parameter 1: {e!r}")
             return None
     
     def read_temperature(self, address: int) -> Optional[float]:
