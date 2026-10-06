@@ -5,7 +5,7 @@ import os
 import json
 import time
 from threading import Thread
-from datetime import datetime
+from datetime import datetime, timezone
 from ..models.calculations import calculate_flows_for_total_flow
 
 
@@ -456,6 +456,9 @@ class CalibrationWindow(tk.Toplevel):
             
     def start_routine(self):
         """Start the calibration routine"""
+        # Entry changes do not all have a trace handler (notably duration), so
+        # refresh both the planned steps and the displayed time at action time.
+        self.update_step_preview()
         # Validate configuration
         if self.directory_var.get() == "No directory selected" or not os.path.exists(self.directory_var.get()):
             messagebox.showerror("Error", "Please select a valid directory for data logging.")
@@ -647,11 +650,11 @@ class CalibrationWindow(tk.Toplevel):
         """Run the calibration routine in a separate thread"""
         try:
             # Create log file
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
             log_file = os.path.join(self.directory_var.get(), f"calibration_{timestamp}.csv")
             
             with open(log_file, 'w') as f:
-                f.write("Step,Target_Conc_ppm,Actual_Conc_ppm,Air_MFC_Address,Air_Setpoint_Lmin,Air_PV_Raw,CH4_Setpoint_Lmin,CH4_PV_Raw,CH4_MFC_Address,Timestamp\n")
+                f.write("Step,Target_Conc_ppm,Actual_Conc_ppm,Air_MFC_Address,Air_Setpoint_Lmin,Air_PV_Raw,Air_Temperature_C,CH4_Setpoint_Lmin,CH4_PV_Raw,CH4_Temperature_C,CH4_MFC_Address,Timestamp_UTC\n")
             
             duration_seconds = self._convert_duration_to_seconds(step_duration, self.duration_unit_var.get())
 
@@ -739,9 +742,12 @@ class CalibrationWindow(tk.Toplevel):
 
                         # Read actual values
                         actual_flow1 = self.controller.read_flow(addr_base) or 0
+                        air_temperature = self.controller.read_temperature(addr_base)
                         actual_flow2 = 0
+                        ch4_temperature = None
                         if addr_variable is not None:
                             actual_flow2 = self.controller.read_flow(addr_variable) or 0
+                            ch4_temperature = self.controller.read_temperature(addr_variable)
 
                         # Calculate actual concentration
                         if (actual_flow1 + actual_flow2) > 0:
@@ -752,8 +758,8 @@ class CalibrationWindow(tk.Toplevel):
                         # Log to file
                         with open(log_file, 'a') as f:
                             f.write(
-                                f"{step_num},{target_conc:.2f},{actual_conc:.2f},{addr_base},{Q1:.8f},{actual_flow1:.8f},"
-                                f"{Q2:.8f},{actual_flow2:.8f},{addr_variable or 0},{datetime.now().isoformat()}\n"
+                                f"{step_num},{target_conc:.2f},{actual_conc:.2f},{addr_base},{Q1:.8f},{actual_flow1:.8f},{air_temperature if air_temperature is not None else ''},"
+                                f"{Q2:.8f},{actual_flow2:.8f},{ch4_temperature if ch4_temperature is not None else ''},{addr_variable or 0},{datetime.now(timezone.utc).isoformat()}\n"
                             )
 
                         next_sample_t += 1.0
@@ -877,6 +883,7 @@ class CalibrationWindow(tk.Toplevel):
     
     def export_config(self):
         """Export the configuration to a file"""
+        self.update_step_preview()
         if not self.computed_steps:
             messagebox.showwarning("Warning", "No steps to export.")
             return

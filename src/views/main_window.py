@@ -582,12 +582,17 @@ class MainWindow(tk.Frame):
             entry.grid(row=row, column=1, padx=5, pady=6, sticky="e")
             row += 1
 
-        ttk.Label(
-            self.concentration_frame, 
-            text="Max Flow (ln/min):",
-            font=('Segoe UI', 9)
-        ).grid(row=row, column=0, padx=5, pady=6, sticky="w")
-        
+        ttk.Label(self.concentration_frame, text="Flow basis:", font=('Segoe UI', 9)).grid(
+            row=row, column=0, padx=5, pady=6, sticky="w")
+        self.variables['flow_basis'] = tk.StringVar(value='max')
+        basis_frame = ttk.Frame(self.concentration_frame)
+        basis_frame.grid(row=row, column=1, padx=5, pady=6, sticky="e")
+        ttk.Radiobutton(basis_frame, text="Max", variable=self.variables['flow_basis'], value='max').pack(side=tk.LEFT)
+        ttk.Radiobutton(basis_frame, text="Total", variable=self.variables['flow_basis'], value='total').pack(side=tk.LEFT, padx=(5, 0))
+        row += 1
+
+        ttk.Label(self.concentration_frame, text="Max Flow (ln/min):", font=('Segoe UI', 9)).grid(
+            row=row, column=0, padx=5, pady=6, sticky="w")
         self.variables['max_flow'] = tk.DoubleVar(value=1.5)
         ttk.Entry(
             self.concentration_frame, 
@@ -595,6 +600,13 @@ class MainWindow(tk.Frame):
             width=12,
             font=('Segoe UI', 10)
         ).grid(row=row, column=1, padx=5, pady=6, sticky="e")
+        row += 1
+
+        ttk.Label(self.concentration_frame, text="Total Flow (ln/min):", font=('Segoe UI', 9)).grid(
+            row=row, column=0, padx=5, pady=6, sticky="w")
+        self.variables['total_flow'] = tk.DoubleVar(value=1.0)
+        ttk.Entry(self.concentration_frame, textvariable=self.variables['total_flow'], width=12,
+                  font=('Segoe UI', 10)).grid(row=row, column=1, padx=5, pady=6, sticky="e")
         row += 1
 
         # Modern calculate button
@@ -1183,20 +1195,25 @@ class MainWindow(tk.Frame):
                     self.print_to_command_output(msg, 'error')
                     return
 
-            # Get max flow value from the GUI
+            # The user may work with a fixed total mixture flow or retain the
+            # historic maximum-per-MFC calculation.
             try:
                 max_flow = float(self.variables['max_flow'].get())
+                total_flow = float(self.variables['total_flow'].get())
             except Exception:
                 max_flow = 1.5  # fallback
+                total_flow = 1.0
 
-            # Calculate flows, now passing max_flow
-            # Try to get values from controller first
-            Q1, Q2 = self.controller.calculate_flows(
-                values['C_tot_ppm'],
-                values['C1_ppm'],
-                values['C2_ppm'],
-                max_flow
-            )
+            if self.variables['flow_basis'].get() == 'total':
+                if total_flow < 0:
+                    raise ValueError("Total flow must be non-negative.")
+                from ..models.calculations import calculate_flows_for_total_flow
+                Q1, Q2 = calculate_flows_for_total_flow(
+                    values['C_tot_ppm'], values['C1_ppm'], values['C2_ppm'], total_flow)
+                self.print_to_command_output(f"Fixed total-flow mode: {total_flow:.6f} ln/min", 'info')
+            else:
+                Q1, Q2 = self.controller.calculate_flows(
+                    values['C_tot_ppm'], values['C1_ppm'], values['C2_ppm'], max_flow)
             
             # Debug the returned values to understand what we're getting
             self.print_to_command_output(f"Debug - Returned flow values: Q1={Q1}, Q2={Q2}")

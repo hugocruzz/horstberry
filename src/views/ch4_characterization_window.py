@@ -8,7 +8,7 @@ the independently acquired SubOcean data by timestamp after the experiment.
 import csv
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -212,7 +212,7 @@ class CH4CharacterizationWindow(tk.Toplevel):
         ch4_pv = self.controller.read_flow(config["selected_address"])
         air_pv = self.controller.read_flow(AIR_MFC_ADDRESS)
         return {
-            "timestamp_local_iso": datetime.now().isoformat(timespec="microseconds"),
+            "timestamp_utc_iso": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
             "record_type": record_type, "run_id": run_id,
             "selected_mfc": config["selected_name"], "selected_mfc_address": config["selected_address"],
             "air_mfc_address": AIR_MFC_ADDRESS, "step_number": step_number, "ramp_direction": direction,
@@ -225,9 +225,9 @@ class CH4CharacterizationWindow(tk.Toplevel):
         }
 
     def _run(self, config):
-        run_id = "ch4_mfc_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = "ch4_mfc_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
         log_path = os.path.join(config["directory"], run_id + ".csv")
-        fields = ["timestamp_local_iso", "record_type", "run_id", "selected_mfc", "selected_mfc_address",
+        fields = ["timestamp_utc_iso", "record_type", "run_id", "selected_mfc", "selected_mfc_address",
                   "air_mfc_address", "step_number", "ramp_direction", "target_ch4_ppm", "source_ch4_ppm",
                   "ch4_mfc_setpoint_l_min", "air_mfc_setpoint_l_min", "total_flow_l_min",
                   "ch4_mfc_setpoint_native", "ch4_mfc_native_unit", "air_mfc_setpoint_native", "air_mfc_native_unit",
